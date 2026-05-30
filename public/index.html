@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Stock Dashboard · Aria</title>
+<script>try{var _t=JSON.parse(localStorage.getItem('stk.theme'));if(_t)document.documentElement.setAttribute('data-theme',_t);}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&family=Prompt:wght@500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
@@ -12,48 +13,73 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <style>
   :root{
-    --bg:#0a0c12; --panel:#12151e; --panel2:#191d28; --line:#262b38;
+    --bg:#0a0c12; --bg-1:#0e1119;
+    --panel:#13161f; --panel2:#191d28; --line:#262b38; --line2:#2f3546;
     --txt:#e7eaf0; --muted:#9aa3b2; --dim:#646b7a;
-    --brand:#3b82f6; --brand2:#60a5fa;
+    --brand:#3b82f6; --brand2:#60a5fa; --violet:#8b5cf6;
     --green:#22c55e; --red:#ef4444; --amber:#f59e0b;
+    --up:#4ade80; --down:#f87171;
+    --chartbg:#0d1017; --track:#3a4150;
+    --shadow:0 1px 2px rgba(0,0,0,.45),0 12px 32px -20px rgba(0,0,0,.8);
+    --shadow-lg:0 28px 70px -34px rgba(0,0,0,.85);
+    --glass:rgba(15,18,26,.72);
     --radius:16px;
   }
+  html[data-theme="light"]{
+    --bg:#eaeef6; --bg-1:#f3f6fb;
+    --panel:#ffffff; --panel2:#f2f5fa; --line:#e3e8f1; --line2:#d5dce8;
+    --txt:#1b2233; --muted:#5a6678; --dim:#9aa4b5;
+    --up:#15a34a; --down:#dc2626;
+    --chartbg:#f7f9fc; --track:#cbd3e0;
+    --shadow:0 1px 2px rgba(30,41,73,.05),0 14px 30px -22px rgba(30,41,73,.32);
+    --shadow-lg:0 28px 64px -34px rgba(30,41,73,.4);
+    --glass:rgba(255,255,255,.78);
+  }
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Sarabun',system-ui,sans-serif;background:var(--bg);color:var(--txt);-webkit-font-smoothing:antialiased}
+  body{font-family:'Sarabun',system-ui,sans-serif;color:var(--txt);-webkit-font-smoothing:antialiased;min-height:100vh;
+    background:radial-gradient(1200px 600px at 82% -12%,var(--bg-1),transparent 60%),
+               radial-gradient(900px 520px at -5% 0%,rgba(59,130,246,.06),transparent 55%),var(--bg);
+    transition:background .3s,color .3s}
   .mono{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
   .head-font{font-family:'Prompt','Sarabun',sans-serif}
   button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
   input,select{font-family:inherit}
   a{color:var(--brand2)}
+  ::selection{background:rgba(59,130,246,.3)}
 
-  .wrap{max-width:1240px;margin:0 auto;padding:26px 28px 80px}
-  .topbar{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:24px}
+  .wrap{max-width:1240px;margin:0 auto;padding:0 28px 80px}
+  .topbar{position:sticky;top:0;z-index:40;display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;
+    margin:0 -28px 24px;padding:16px 28px;background:var(--glass);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
   .brand{display:flex;align-items:center;gap:13px}
-  .brand .mark{width:44px;height:44px;border-radius:13px;background:linear-gradient(135deg,#3b82f6,#8b5cf6);display:grid;place-items:center;font-size:23px}
-  .brand h1{font-size:19px}
+  .brand .mark{width:46px;height:46px;border-radius:14px;background:linear-gradient(135deg,var(--brand),var(--violet));display:grid;place-items:center;font-size:23px;box-shadow:0 8px 22px -8px rgba(59,130,246,.6)}
+  .brand h1{font-size:19px;letter-spacing:.2px}
   .brand p{font-size:11.5px;color:var(--muted);letter-spacing:1px}
-  .toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-  .status{font-size:12.5px;display:flex;align-items:center;gap:7px;color:var(--muted);padding:7px 12px;border:1px solid var(--line);border-radius:10px}
+  .toolbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .status{font-size:12.5px;display:flex;align-items:center;gap:7px;color:var(--muted);padding:7px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
   .dot{width:8px;height:8px;border-radius:50%}
-  .dot.ok{background:var(--green);box-shadow:0 0 8px var(--green)}
-  .dot.err{background:var(--red)}
+  .dot.ok{background:var(--green);box-shadow:0 0 0 3px rgba(34,197,94,.18),0 0 8px var(--green)}
+  .dot.err{background:var(--red);box-shadow:0 0 0 3px rgba(239,68,68,.18)}
   .dot.idle{background:var(--dim)}
 
-  .btn{background:var(--brand);color:#fff;padding:9px 16px;border-radius:11px;font-weight:600;font-size:13.5px;display:inline-flex;align-items:center;gap:7px;transition:.15s}
-  .btn:hover{background:var(--brand2)}
-  .btn.ghost{background:var(--panel2);color:var(--txt);border:1px solid var(--line)}
-  .btn.ghost:hover{border-color:var(--brand)}
+  .btn{background:var(--brand);color:#fff;padding:9px 16px;border-radius:11px;font-weight:600;font-size:13.5px;display:inline-flex;align-items:center;gap:7px;transition:.15s;box-shadow:0 6px 16px -10px rgba(59,130,246,.9)}
+  .btn:hover{background:var(--brand2);transform:translateY(-1px)}
+  .btn:active{transform:translateY(0)}
+  .btn.ghost{background:var(--panel2);color:var(--txt);border:1px solid var(--line);box-shadow:none}
+  .btn.ghost:hover{border-color:var(--brand);background:var(--panel)}
   .btn.sm{padding:6px 11px;font-size:12.5px;border-radius:9px}
-  .btn.danger{background:#2a1416;color:#fca5a5;border:1px solid #3a1d22}
-  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn.danger{background:#2a1416;color:#fca5a5;border:1px solid #3a1d22;box-shadow:none}
+  .btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+  html[data-theme="light"] .btn.danger{background:#fde8e8;color:#dc2626;border-color:#f7caca}
+  html[data-theme="light"] .btn.ghost{box-shadow:var(--shadow)}
 
-  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:15px;margin-bottom:24px}
-  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(186px,1fr));gap:15px;margin-bottom:24px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+  .kpi::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--brand),var(--violet));opacity:.85}
   .kpi .lab{font-size:12.5px;color:var(--muted)}
-  .kpi .val{font-size:27px;font-weight:700;margin-top:7px;line-height:1}
-  .kpi .meta{font-size:12px;margin-top:6px;color:var(--dim)}
+  .kpi .val{font-size:27px;font-weight:700;margin-top:9px;line-height:1}
+  .kpi .meta{font-size:12px;margin-top:7px;color:var(--dim)}
 
-  .section{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:20px;margin-bottom:22px}
+  .section{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:20px;margin-bottom:22px;box-shadow:var(--shadow)}
   .section .sh{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
   .section h3{font-size:16px;font-weight:600;display:flex;align-items:center;gap:9px}
 
@@ -61,24 +87,40 @@
   th{text-align:left;color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;padding:9px 10px;border-bottom:1px solid var(--line)}
   td{padding:11px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
   tr:last-child td{border-bottom:none}
-  tbody tr.click{cursor:pointer}
+  tbody tr.click{cursor:pointer;transition:background .12s}
   tbody tr.click:hover{background:var(--panel2)}
   .num{text-align:right}
-  .up{color:#4ade80} .down{color:#f87171}
+  .up{color:var(--up)} .down{color:var(--down)}
   .ah{font-size:10px;font-weight:600;margin-top:2px;opacity:.85;letter-spacing:.2px}
 
   .pill{font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px;letter-spacing:.4px;white-space:nowrap}
   .pill.buy{background:#0f2a1a;color:#4ade80} .pill.sell{background:#2a1416;color:#f87171}
   .pill.hold{background:#27211040;color:#fcd34d;border:1px solid #3a2f15} .pill.na{background:#23262f;color:var(--dim)}
+  html[data-theme="light"] .pill.buy{background:#dcfce7;color:#15803d}
+  html[data-theme="light"] .pill.sell{background:#fee2e2;color:#b91c1c}
+  html[data-theme="light"] .pill.hold{background:#fef9c3;color:#a16207;border-color:#fde68a}
+  html[data-theme="light"] .pill.na{background:#eef1f6;color:#94a0b2}
   .sym{font-weight:700;font-family:'Prompt'} .symx{font-size:11px;color:var(--dim)}
   .rsi-b{display:inline-block;min-width:34px;text-align:center;padding:2px 0;border-radius:6px;font-size:12.5px;font-weight:700}
 
-  .add-row{display:flex;gap:9px}
-  .inp{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 12px;color:var(--txt);font-size:14px;width:100%}
-  .inp:focus{outline:none;border-color:var(--brand)}
+  .wl-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel2)}
+  .seg button{padding:6px 13px;font-size:12.5px;color:var(--muted);font-weight:600;transition:.12s}
+  .seg button.on{background:var(--brand);color:#fff}
+  .seg button:not(.on):hover{color:var(--txt);background:var(--panel)}
+  .sel{width:auto;padding:7px 11px;font-size:12.5px}
+  .wl-count{font-size:12px;color:var(--dim);margin-left:auto}
+  .alloc{height:5px;border-radius:3px;background:var(--line);overflow:hidden;min-width:46px}
+  .alloc>span{display:block;height:100%;background:linear-gradient(90deg,var(--brand),var(--violet))}
 
-  .overlay{position:fixed;inset:0;background:rgba(4,6,11,.74);backdrop-filter:blur(3px);display:grid;place-items:center;z-index:100;padding:18px}
-  .modal{background:var(--panel);border:1px solid var(--line);border-radius:18px;width:100%;max-width:560px;max-height:92vh;overflow:auto;padding:24px}
+  .add-row{display:flex;gap:9px}
+  .inp{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 12px;color:var(--txt);font-size:14px;width:100%;transition:border-color .15s,background .15s}
+  .inp:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+
+  .overlay{position:fixed;inset:0;background:rgba(4,6,11,.66);backdrop-filter:blur(4px);display:grid;place-items:center;z-index:100;padding:18px;animation:fade .15s ease}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:18px;width:100%;max-width:560px;max-height:92vh;overflow:auto;padding:24px;box-shadow:var(--shadow-lg);animation:pop .18s ease}
+  @keyframes pop{from{opacity:0;transform:translateY(8px) scale(.99)}to{opacity:1;transform:none}}
   .modal h3{font-size:19px;margin-bottom:3px}
   .modal .msub{color:var(--muted);font-size:13px;margin-bottom:18px}
   .field{margin-bottom:14px}
@@ -88,15 +130,25 @@
 
   .banner{background:linear-gradient(135deg,rgba(59,130,246,.14),rgba(139,92,246,.08));border:1px solid #2c3550;border-radius:var(--radius);padding:22px;margin-bottom:22px}
   .banner h3{font-size:17px;margin-bottom:10px}
-  .banner ol{margin:10px 0 0 18px;font-size:13.5px;line-height:1.9;color:#cdd3df}
-  .banner code{background:#0c0f17;border:1px solid var(--line);padding:2px 7px;border-radius:6px;font-family:'JetBrains Mono';font-size:12.5px}
+  .banner ol{margin:10px 0 0 18px;font-size:13.5px;line-height:1.9;color:var(--muted)}
+  .banner code{background:var(--chartbg);border:1px solid var(--line);padding:2px 7px;border-radius:6px;font-family:'JetBrains Mono';font-size:12.5px}
   .empty{text-align:center;padding:40px;color:var(--dim)}
   .ind-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:8px 0 4px}
   .ind{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:12px}
   .ind .l{font-size:11.5px;color:var(--muted)} .ind .v{font-size:18px;font-weight:700;margin-top:3px}
-  .reason{font-size:13px;color:#cdd3df;line-height:1.7;margin-top:4px}
+  .reason{font-size:13px;color:var(--muted);line-height:1.7;margin-top:4px}
   .reason li{margin-left:18px}
-  @media(max-width:720px){ .hide-sm{display:none} .wrap{padding:18px 14px 70px} }
+  @media(max-width:720px){
+    .hide-sm{display:none}
+    .wrap{padding:0 14px 70px}
+    .topbar{margin:0 -14px 18px;padding:13px 14px}
+    .brand .mark{width:40px;height:40px;font-size:21px}
+    .brand h1{font-size:17px}
+    .kpi .val{font-size:23px}
+    .modal{padding:18px}
+    .row3{grid-template-columns:1fr}
+    .wl-count{margin-left:0}
+  }
 </style>
 </head>
 <body>
@@ -283,6 +335,10 @@ function App(){
   const [showBackup,setShowBackup] = useState(false);
   const [detail,setDetail] = useState(null);     // symbol string
   const [addSym,setAddSym] = useState("");
+  const [theme,setTheme] = useLS("theme","dark");        // สลับธีม สว่าง/มืด (เก็บใน localStorage)
+  const [sortBy,setSortBy] = useState("default");        // เรียง watchlist
+  const [filt,setFilt] = useState("all");                // กรอง watchlist: ทั้งหมด/ขึ้น/ลง
+  useEffect(()=>{ document.documentElement.setAttribute("data-theme",theme); },[theme]);
 
   const symbols = useMemo(()=>{
     const s = new Set(watch.map(w=>w.symbol));
@@ -362,6 +418,32 @@ function App(){
     });
     return {cost,val,pl:val-cost,plPct: cost?((val-cost)/cost*100):0, day};
   },[positions,data]);
+
+  // สรุปการเคลื่อนไหววันนี้ของ watchlist (ขึ้นกี่ตัว/ลงกี่ตัว + ตัวเด่น/ตัวร่วงสุด)
+  const movers = useMemo(()=>{
+    let up=0,down=0,best=null,worst=null;
+    watch.forEach(w=>{ const d=data[w.symbol]; if(!d||d.chgPct==null) return;
+      if(d.chgPct>=0) up++; else down++;
+      if(!best||d.chgPct>best.chgPct) best={symbol:w.symbol,chgPct:d.chgPct};
+      if(!worst||d.chgPct<worst.chgPct) worst={symbol:w.symbol,chgPct:d.chgPct};
+    });
+    return {up,down,best,worst};
+  },[watch,data]);
+
+  // watchlist ที่กรอง+เรียงแล้ว (ไม่แตะ watch จริง — แค่ลำดับการแสดงผล)
+  const shownWatch = useMemo(()=>{
+    let arr=[...watch];
+    if(filt!=="all") arr=arr.filter(w=>{ const d=data[w.symbol]; if(!d||d.chgPct==null) return false; return filt==="up"?d.chgPct>=0:d.chgPct<0; });
+    const g=w=>{ const d=data[w.symbol]||{}; const ind=d.ind||{}; return {chg:d.chgPct,rsi:ind.rsi,sig:d.sig&&d.sig.score}; };
+    const n=(v,f)=>v==null?f:v;
+    if(sortBy==="chg")        arr.sort((a,b)=>n(g(b).chg,-1e9)-n(g(a).chg,-1e9));
+    else if(sortBy==="chgUp") arr.sort((a,b)=>n(g(a).chg,1e9)-n(g(b).chg,1e9));
+    else if(sortBy==="rsi")   arr.sort((a,b)=>n(g(b).rsi,-1)-n(g(a).rsi,-1));
+    else if(sortBy==="rsiLow")arr.sort((a,b)=>n(g(a).rsi,999)-n(g(b).rsi,999));
+    else if(sortBy==="sig")   arr.sort((a,b)=>n(g(b).sig,-99)-n(g(a).sig,-99));
+    else if(sortBy==="az")    arr.sort((a,b)=>a.symbol.localeCompare(b.symbol));
+    return arr;
+  },[watch,data,sortBy,filt]);
 
   async function addSymbol(){
     const s=addSym.trim().toUpperCase(); if(!s) return;
@@ -462,6 +544,7 @@ function App(){
           </div>
           <button className="btn ghost sm" onClick={refresh} disabled={loading}>{loading?"กำลังโหลด…":"↻ Sync"}</button>
           <button className="btn ghost sm" onClick={()=>setShowBackup(true)} title="สำรอง/กู้คืน watchlist + การตั้งค่า — ใช้ย้ายข้อมูลข้ามเครื่อง/ข้ามเวอร์ชันที่ host">💾 สำรอง/กู้คืน</button>
+          <button className="btn ghost sm" onClick={()=>setTheme(theme==="dark"?"light":"dark")} title={theme==="dark"?"สลับเป็นธีมสว่าง":"สลับเป็นธีมมืด"}>{theme==="dark"?"☀️":"🌙"}</button>
           <button className="btn ghost sm" onClick={()=>setShowSet(true)}>⚙ ตั้งค่า</button>
         </div>
       </div>
@@ -484,7 +567,8 @@ function App(){
         <div className="kpi"><div className="lab">มูลค่าพอร์ต</div><div className="val mono">${fmt(port.val,0)}</div><div className="meta">ต้นทุน ${fmt(port.cost,0)}</div></div>
         <div className="kpi"><div className="lab">กำไร/ขาดทุนรวม</div><div className={"val mono "+(port.pl>=0?"up":"down")}>{port.pl>=0?"+":""}${fmt(port.pl,0)}</div><div className="meta">{port.pl>=0?"+":""}{fmt(port.plPct)}%</div></div>
         <div className="kpi"><div className="lab">วันนี้</div><div className={"val mono "+(port.day>=0?"up":"down")}>{port.day>=0?"+":""}${fmt(port.day,0)}</div><div className="meta">เปลี่ยนแปลงวันนี้</div></div>
-        <div className="kpi"><div className="lab">เฝ้าดู</div><div className="val mono">{watch.length}</div><div className="meta">ถือ {positions.length} ตัว</div></div>
+        <div className="kpi"><div className="lab">เฝ้าดู</div><div className="val mono">{watch.length}</div><div className="meta"><span className="up">▲{movers.up}</span> <span className="down">▼{movers.down}</span> · ถือ {positions.length}</div></div>
+        <div className="kpi"><div className="lab">ตัวเด่นวันนี้</div><div className="val mono" style={{fontSize:22}}>{movers.best?movers.best.symbol:"—"}</div><div className={"meta "+(movers.best&&movers.best.chgPct>=0?"up":"down")}>{movers.best?(movers.best.chgPct>=0?"+":"")+fmt(movers.best.chgPct)+"% วันนี้":"ยังไม่มีข้อมูล"}</div></div>
       </div>
 
       {/* Watchlist */}
@@ -502,6 +586,23 @@ function App(){
             </div>
           </div>
         </div>
+        <div className="wl-tools">
+          <div className="seg">
+            <button className={filt==="all"?"on":""} onClick={()=>setFilt("all")}>ทั้งหมด</button>
+            <button className={filt==="up"?"on":""} onClick={()=>setFilt("up")}>▲ ขึ้น</button>
+            <button className={filt==="down"?"on":""} onClick={()=>setFilt("down")}>▼ ลง</button>
+          </div>
+          <select className="inp sel" value={sortBy} onChange={e=>setSortBy(e.target.value)} title="เรียงลำดับ watchlist">
+            <option value="default">เรียง: ตามที่เพิ่ม</option>
+            <option value="chg">% เปลี่ยน มาก → น้อย</option>
+            <option value="chgUp">% เปลี่ยน น้อย → มาก</option>
+            <option value="rsi">RSI สูง → ต่ำ</option>
+            <option value="rsiLow">RSI ต่ำ → สูง</option>
+            <option value="sig">สัญญาณ (ซื้อก่อน)</option>
+            <option value="az">ชื่อ A → Z</option>
+          </select>
+          <span className="wl-count">{shownWatch.length}/{watch.length} ตัว</span>
+        </div>
         <div style={{overflowX:"auto"}}>
         <table>
           <thead><tr>
@@ -510,7 +611,7 @@ function App(){
             <th>สัญญาณ</th><th className="num hide-sm">Entry / SL / TP</th><th></th>
           </tr></thead>
           <tbody>
-            {watch.map(w=>{
+            {shownWatch.map(w=>{
               const d=data[w.symbol]||{};
               const ind=d.ind, sig=d.sig||{label:"—",cls:"na"};
               const rsiVal=ind&&ind.rsi;
@@ -541,6 +642,7 @@ function App(){
         </table>
         </div>
         {watch.length===0 && <div className="empty">ยังไม่มีหุ้นใน watchlist — เพิ่มด้านบน</div>}
+        {watch.length>0 && shownWatch.length===0 && <div className="empty">ไม่มีหุ้นตรงตามตัวกรอง — ลองเปลี่ยนเป็น "ทั้งหมด"</div>}
       </div>
 
       {/* Positions */}
@@ -592,10 +694,10 @@ function Toggle({on,onChange,label,color="#22c55e"}){
   return (
     <button type="button" onClick={()=>onChange(!on)}
       style={{display:"flex",alignItems:"center",gap:9,background:"none",border:"none",cursor:"pointer",padding:"5px 0",textAlign:"left"}}>
-      <span style={{width:38,height:22,borderRadius:11,background:on?color:"#3a4150",position:"relative",transition:"background .15s",flexShrink:0,display:"inline-block"}}>
+      <span style={{width:38,height:22,borderRadius:11,background:on?color:"var(--track)",position:"relative",transition:"background .15s",flexShrink:0,display:"inline-block"}}>
         <span style={{position:"absolute",top:2,left:on?18:2,width:18,height:18,borderRadius:"50%",background:"#fff",transition:"left .15s",boxShadow:"0 1px 2px rgba(0,0,0,.4)"}}></span>
       </span>
-      <span style={{fontSize:13,color:on?"var(--text,#e8ecf3)":"var(--dim)"}}>{label}</span>
+      <span style={{fontSize:13,color:on?"var(--txt)":"var(--dim)"}}>{label}</span>
     </button>
   );
 }
@@ -619,7 +721,7 @@ function EmaChart({closes, show, w=560, h=240}){
   const areaPts = "" + X(0).toFixed(1)+","+(h-padB) + " " + linePts(px) + " " + X(N-1).toFixed(1)+","+(h-padB);
   return (
     <div>
-      <svg width="100%" viewBox={"0 0 "+w+" "+h} style={{display:"block",background:"#0d1017",borderRadius:10,border:"1px solid #1c2230"}}>
+      <svg width="100%" viewBox={"0 0 "+w+" "+h} style={{display:"block",background:"var(--chartbg)",borderRadius:10,border:"1px solid var(--line)"}}>
         <polygon points={areaPts} fill={priceCol} opacity="0.07"/>
         <polyline points={linePts(px)} fill="none" stroke={priceCol} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round"/>
         {series.map(s=> <polyline key={s.p} points={linePts(s.vals)} fill="none" stroke={s.c} strokeWidth="1.4" strokeLinejoin="round" strokeLinecap="round" opacity="0.95"/>)}
@@ -642,6 +744,7 @@ function Positions({positions,setPositions,updatePos,data}){
   const [add,setAdd]=useState(false);
   const [f,setF]=useState({symbol:"",qty:0,cost:0});
   const cell={padding:"4px 6px",fontSize:13,height:30};
+  const totalVal=positions.reduce((s,p)=>{ const px=data[p.symbol]&&data[p.symbol].price; return s+(px?px*p.qty:0); },0);
   function save(){ if(!f.symbol||!f.qty) return; setPositions([...positions,{...f,id:Date.now(),symbol:f.symbol.toUpperCase()}]); setF({symbol:"",qty:0,cost:0}); setAdd(false); }
   function del(id){ if(confirm("ลบโพสิชั่นนี้?")) setPositions(positions.filter(p=>p.id!==id)); }
   return (
@@ -649,7 +752,7 @@ function Positions({positions,setPositions,updatePos,data}){
       <div className="sh"><h3>💼 พอร์ตที่ถืออยู่</h3><button className="btn sm" onClick={()=>setAdd(true)}>+ เพิ่มโพสิชั่น</button></div>
       {positions.length===0 ? <div className="empty">ยังไม่มีหุ้นที่ถือ — กด "เพิ่มโพสิชั่น" เพื่อบันทึกที่ซื้อไว้</div> :
         <div style={{overflowX:"auto"}}><table>
-          <thead><tr><th>หุ้น</th><th className="num">จำนวน</th><th className="num">ต้นทุน</th><th className="num">ราคาnow</th><th className="num">มูลค่า</th><th className="num">กำไร/ขาดทุน</th><th></th></tr></thead>
+          <thead><tr><th>หุ้น</th><th className="num">จำนวน</th><th className="num">ต้นทุน</th><th className="num">ราคาnow</th><th className="num">มูลค่า</th><th className="num hide-sm">%พอร์ต</th><th className="num">กำไร/ขาดทุน</th><th></th></tr></thead>
           <tbody>
             {positions.map(p=>{
               const px=(data[p.symbol]&&data[p.symbol].price)||null;
@@ -664,6 +767,11 @@ function Positions({positions,setPositions,updatePos,data}){
                        onChange={e=>updatePos(p.id,{cost:+e.target.value})}/></td>
                   <td className="num mono">{px!=null?fmt(px):"—"}</td>
                   <td className="num mono">{val!=null?"$"+fmt(val,0):"—"}</td>
+                  <td className="num hide-sm">{val!=null&&totalVal>0?
+                    <div style={{display:"flex",alignItems:"center",gap:7,justifyContent:"flex-end"}}>
+                      <div className="alloc"><span style={{width:Math.min(100,val/totalVal*100)+"%"}}></span></div>
+                      <span className="mono" style={{fontSize:12,color:"var(--muted)"}}>{fmt(val/totalVal*100,0)}%</span>
+                    </div> : <span style={{color:"var(--dim)"}}>—</span>}</td>
                   <td className={"num mono "+(pl>=0?"up":"down")}>{pl!=null?(pl>=0?"+":"")+"$"+fmt(pl,0)+" ("+(plPct>=0?"+":"")+fmt(plPct)+"%)":"—"}</td>
                   <td className="num"><button className="btn danger sm" onClick={()=>del(p.id)}>✕</button></td>
                 </tr>
@@ -693,10 +801,10 @@ function Positions({positions,setPositions,updatePos,data}){
 function ProPlan({ind}){
   const plan = ind ? suggestPro(ind) : null;
   if(!plan) return null;
-  const box={background:"#0f1320",border:"1px solid #232a3a",borderRadius:12,padding:"13px 15px",marginTop:16};
+  const box={background:"var(--panel2)",border:"1px solid var(--line)",borderRadius:12,padding:"13px 15px",marginTop:16};
   const th={textAlign:"left",fontSize:11,color:"var(--dim)",fontWeight:600,padding:"3px 6px"};
   const td={padding:"6px 6px",fontSize:13};
-  const rowSty={borderTop:"1px solid #1a2030"};
+  const rowSty={borderTop:"1px solid var(--line)"};
   return (
     <div style={box}>
       <div style={{fontSize:13.5,fontWeight:700}}>📐 แผนเข้า 3 ไม้ (Scale-in มืออาชีพ)</div>
