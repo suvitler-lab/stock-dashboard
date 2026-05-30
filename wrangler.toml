@@ -1,0 +1,7 @@
+name = "stock-dashboard"
+compatibility_date = "2024-11-01"
+
+# เว็บ static ล้วน (ไม่มีโค้ด Worker) — เสิร์ฟไฟล์ใน ./public ตรงๆ
+[assets]
+directory = "./public"
+not_found_handling = "single-page-application"
