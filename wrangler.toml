@@ -1,7 +1,9 @@
 name = "stock-dashboard"
+main = "worker.js"
 compatibility_date = "2024-11-01"
 
-# เว็บ static ล้วน (ไม่มีโค้ด Worker) — เสิร์ฟไฟล์ใน ./public ตรงๆ
+# Worker + Static Assets — เสิร์ฟไฟล์ใน ./public ผ่าน binding ASSETS
+# Worker รันเฉพาะ route ที่ไม่ใช่ไฟล์ static (เช่น /api/ics = proxy ปฏิทิน iCal)
 [assets]
 directory = "./public"
-not_found_handling = "single-page-application"
+binding = "ASSETS"
