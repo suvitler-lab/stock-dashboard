@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Stock Dashboard · Aria</title>
+<script>try{var _t=JSON.parse(localStorage.getItem('stk.theme'));if(_t)document.documentElement.setAttribute('data-theme',_t);}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&family=Prompt:wght@500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  :root{
+    --bg:#0a0c12; --bg-1:#0e1119;
+    --panel:#13161f; --panel2:#191d28; --line:#262b38; --line2:#2f3546;
+    --txt:#e7eaf0; --muted:#9aa3b2; --dim:#646b7a;
+    --brand:#3b82f6; --brand2:#60a5fa; --violet:#8b5cf6;
+    --green:#22c55e; --red:#ef4444; --amber:#f59e0b;
+    --up:#4ade80; --down:#f87171;
+    --chartbg:#0d1017; --track:#3a4150;
+    --shadow:0 1px 2px rgba(0,0,0,.45),0 12px 32px -20px rgba(0,0,0,.8);
+    --shadow-lg:0 28px 70px -34px rgba(0,0,0,.85);
+    --glass:rgba(15,18,26,.72);
+    --radius:16px;
+  }
+  html[data-theme="light"]{
+    --bg:#eaeef6; --bg-1:#f3f6fb;
+    --panel:#ffffff; --panel2:#f2f5fa; --line:#e3e8f1; --line2:#d5dce8;
+    --txt:#1b2233; --muted:#5a6678; --dim:#9aa4b5;
+    --up:#15a34a; --down:#dc2626;
+    --chartbg:#f7f9fc; --track:#cbd3e0;
+    --shadow:0 1px 2px rgba(30,41,73,.05),0 14px 30px -22px rgba(30,41,73,.32);
+    --shadow-lg:0 28px 64px -34px rgba(30,41,73,.4);
+    --glass:rgba(255,255,255,.78);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Sarabun',system-ui,sans-serif;color:var(--txt);-webkit-font-smoothing:antialiased;min-height:100vh;
+    background:radial-gradient(1200px 600px at 82% -12%,var(--bg-1),transparent 60%),
+               radial-gradient(900px 520px at -5% 0%,rgba(59,130,246,.06),transparent 55%),var(--bg);
+    transition:background .3s,color .3s}
+  .mono{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
+  .head-font{font-family:'Prompt','Sarabun',sans-serif}
+  button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+  input,select{font-family:inherit}
+  a{color:var(--brand2)}
+  ::selection{background:rgba(59,130,246,.3)}
+
+  .wrap{max-width:1240px;margin:0 auto;padding:0 28px 80px}
+  .topbar{position:sticky;top:0;z-index:40;display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;
+    margin:0 -28px 24px;padding:16px 28px;background:var(--glass);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:13px}
+  .brand .mark{width:46px;height:46px;border-radius:14px;background:linear-gradient(135deg,var(--brand),var(--violet));display:grid;place-items:center;font-size:23px;box-shadow:0 8px 22px -8px rgba(59,130,246,.6)}
+  .brand h1{font-size:19px;letter-spacing:.2px}
+  .brand p{font-size:11.5px;color:var(--muted);letter-spacing:1px}
+  .toolbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .status{font-size:12.5px;display:flex;align-items:center;gap:7px;color:var(--muted);padding:7px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+  .dot{width:8px;height:8px;border-radius:50%}
+  .dot.ok{background:var(--green);box-shadow:0 0 0 3px rgba(34,197,94,.18),0 0 8px var(--green)}
+  .dot.err{background:var(--red);box-shadow:0 0 0 3px rgba(239,68,68,.18)}
+  .dot.idle{background:var(--dim)}
+
+  .btn{background:var(--brand);color:#fff;padding:9px 16px;border-radius:11px;font-weight:600;font-size:13.5px;display:inline-flex;align-items:center;gap:7px;transition:.15s;box-shadow:0 6px 16px -10px rgba(59,130,246,.9)}
+  .btn:hover{background:var(--brand2);transform:translateY(-1px)}
+  .btn:active{transform:translateY(0)}
+  .btn.ghost{background:var(--panel2);color:var(--txt);border:1px solid var(--line);box-shadow:none}
+  .btn.ghost:hover{border-color:var(--brand);background:var(--panel)}
+  .btn.sm{padding:6px 11px;font-size:12.5px;border-radius:9px}
+  .btn.danger{background:#2a1416;color:#fca5a5;border:1px solid #3a1d22;box-shadow:none}
+  .btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+  html[data-theme="light"] .btn.danger{background:#fde8e8;color:#dc2626;border-color:#f7caca}
+  html[data-theme="light"] .btn.ghost{box-shadow:var(--shadow)}
+
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(186px,1fr));gap:15px;margin-bottom:24px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+  .kpi::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--brand),var(--violet));opacity:.85}
+  .kpi .lab{font-size:12.5px;color:var(--muted)}
+  .kpi .val{font-size:27px;font-weight:700;margin-top:9px;line-height:1}
+  .kpi .meta{font-size:12px;margin-top:7px;color:var(--dim)}
+
+  .section{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:20px;margin-bottom:22px;box-shadow:var(--shadow)}
+  .section .sh{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+  .section h3{font-size:16px;font-weight:600;display:flex;align-items:center;gap:9px}
+
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th{text-align:left;color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;padding:9px 10px;border-bottom:1px solid var(--line)}
+  td{padding:11px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  tbody tr.click{cursor:pointer;transition:background .12s}
+  tbody tr.click:hover{background:var(--panel2)}
+  .num{text-align:right}
+  .up{color:var(--up)} .down{color:var(--down)}
+  .ah{font-size:10px;font-weight:600;margin-top:2px;opacity:.85;letter-spacing:.2px}
+
+  .pill{font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px;letter-spacing:.4px;white-space:nowrap}
+  .pill.buy{background:#0f2a1a;color:#4ade80} .pill.sell{background:#2a1416;color:#f87171}
+  .pill.hold{background:#27211040;color:#fcd34d;border:1px solid #3a2f15} .pill.na{background:#23262f;color:var(--dim)}
+  html[data-theme="light"] .pill.buy{background:#dcfce7;color:#15803d}
+  html[data-theme="light"] .pill.sell{background:#fee2e2;color:#b91c1c}
+  html[data-theme="light"] .pill.hold{background:#fef9c3;color:#a16207;border-color:#fde68a}
+  html[data-theme="light"] .pill.na{background:#eef1f6;color:#94a0b2}
+  .sym{font-weight:700;font-family:'Prompt'} .symx{font-size:11px;color:var(--dim)}
+  .rsi-b{display:inline-block;min-width:34px;text-align:center;padding:2px 0;border-radius:6px;font-size:12.5px;font-weight:700}
+
+  .wl-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel2)}
+  .seg button{padding:6px 13px;font-size:12.5px;color:var(--muted);font-weight:600;transition:.12s}
+  .seg button.on{background:var(--brand);color:#fff}
+  .seg button:not(.on):hover{color:var(--txt);background:var(--panel)}
+  .sel{width:auto;padding:7px 11px;font-size:12.5px}
+  .wl-count{font-size:12px;color:var(--dim);margin-left:auto}
+  .alloc{height:5px;border-radius:3px;background:var(--line);overflow:hidden;min-width:46px}
+  .alloc>span{display:block;height:100%;background:linear-gradient(90deg,var(--brand),var(--violet))}
+
+  .add-row{display:flex;gap:9px}
+  .inp{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 12px;color:var(--txt);font-size:14px;width:100%;transition:border-color .15s,background .15s}
+  .inp:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+
+  .overlay{position:fixed;inset:0;background:rgba(4,6,11,.66);backdrop-filter:blur(4px);display:grid;place-items:center;z-index:100;padding:18px;animation:fade .15s ease}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:18px;width:100%;max-width:560px;max-height:92vh;overflow:auto;padding:24px;box-shadow:var(--shadow-lg);animation:pop .18s ease}
+  @keyframes pop{from{opacity:0;transform:translateY(8px) scale(.99)}to{opacity:1;transform:none}}
+  .modal h3{font-size:19px;margin-bottom:3px}
+  .modal .msub{color:var(--muted);font-size:13px;margin-bottom:18px}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:11px}
+  .modal-acts{display:flex;gap:10px;justify-content:flex-end;margin-top:20px;flex-wrap:wrap}
+
+  .banner{background:linear-gradient(135deg,rgba(59,130,246,.14),rgba(139,92,246,.08));border:1px solid #2c3550;border-radius:var(--radius);padding:22px;margin-bottom:22px}
+  .banner h3{font-size:17px;margin-bottom:10px}
+  .banner ol{margin:10px 0 0 18px;font-size:13.5px;line-height:1.9;color:var(--muted)}
+  .banner code{background:var(--chartbg);border:1px solid var(--line);padding:2px 7px;border-radius:6px;font-family:'JetBrains Mono';font-size:12.5px}
+  .empty{text-align:center;padding:40px;color:var(--dim)}
+  .ind-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:8px 0 4px}
+  .ind{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:12px}
+  .ind .l{font-size:11.5px;color:var(--muted)} .ind .v{font-size:18px;font-weight:700;margin-top:3px}
+  .reason{font-size:13px;color:var(--muted);line-height:1.7;margin-top:4px}
+  .reason li{margin-left:18px}
+  @media(max-width:720px){
+    .hide-sm{display:none}
+    .wrap{padding:0 14px 70px}
+    .topbar{margin:0 -14px 18px;padding:13px 14px}
+    .brand .mark{width:40px;height:40px;font-size:21px}
+    .brand h1{font-size:17px}
+    .kpi .val{font-size:23px}
+    .modal{padding:18px}
+    .row3{grid-template-columns:1fr}
+    .wl-count{margin-left:0}
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const {useState,useEffect,useRef,useMemo,useCallback} = React;
+
+/* ---------- storage ---------- */
+const LS="stk.";
+function useLS(key,initial){
+  const [v,setV]=useState(()=>{try{const r=localStorage.getItem(LS+key);return r!=null?JSON.parse(r):initial;}catch(e){return initial;}});
+  useEffect(()=>{try{localStorage.setItem(LS+key,JSON.stringify(v));}catch(e){}},[key,v]);
+  return [v,setV];
+}
+
+/* ---------- indicators (computed client-side from close array) ---------- */
+function ema(arr,p){ if(!arr||arr.length<p) return null; const k=2/(p+1); let e=arr.slice(0,p).reduce((a,b)=>a+b,0)/p; for(let i=p;i<arr.length;i++) e=arr[i]*k+e*(1-k); return e; }
+function emaSeries(arr,p){ if(!arr||arr.length<p) return []; const k=2/(p+1); let e=arr.slice(0,p).reduce((a,b)=>a+b,0)/p; const out=[e]; for(let i=p;i<arr.length;i++){e=arr[i]*k+e*(1-k);out.push(e);} return out; }
+// EMA แบบเต็มความยาว (null ช่วงต้นที่ข้อมูลยังไม่พอ) — ไว้วาดเส้นบนกราฟให้ตรงแกน X กับราคา
+function emaFull(arr,p){ if(!arr||arr.length<p) return (arr||[]).map(()=>null); const k=2/(p+1); const out=new Array(arr.length).fill(null); let e=arr.slice(0,p).reduce((a,b)=>a+b,0)/p; out[p-1]=e; for(let i=p;i<arr.length;i++){e=arr[i]*k+e*(1-k);out[i]=e;} return out; }
+function sma(arr,p){ if(!arr||arr.length<p) return null; const s=arr.slice(-p); return s.reduce((a,b)=>a+b,0)/p; }
+function rsi(arr,p=14){
+  // Wilder's RSI (RMA smoothing) — ตรงกับ TradingView/standard
+  if(!arr||arr.length<p+1) return null;
+  let g=0,l=0;
+  for(let i=1;i<=p;i++){ const d=arr[i]-arr[i-1]; if(d>=0) g+=d; else l-=d; }
+  let ag=g/p, al=l/p;
+  for(let i=p+1;i<arr.length;i++){
+    const d=arr[i]-arr[i-1];
+    const up=d>0?d:0, dn=d<0?-d:0;
+    ag=(ag*(p-1)+up)/p;
+    al=(al*(p-1)+dn)/p;
+  }
+  if(al===0) return 100;
+  return 100-100/(1+ag/al);
+}
+function macd(arr){
+  if(!arr||arr.length<35) return null;
+  const e12=emaSeries(arr,12), e26=emaSeries(arr,26);
+  const off=e12.length-e26.length;
+  const line=e26.map((v,i)=>e12[i+off]-v);
+  const sig=emaSeries(line,9);
+  const m=line[line.length-1], s=sig[sig.length-1];
+  return {line:m, signal:s, hist:m-s};
+}
+function stdev(arr,p){ if(!arr||arr.length<p) return null; const s=arr.slice(-p); const m=s.reduce((a,b)=>a+b,0)/p; const v=s.reduce((a,b)=>a+(b-m)*(b-m),0)/p; return Math.sqrt(v); }
+function bollinger(arr,p=20,mult=2){ const mid=sma(arr,p), sd=stdev(arr,p); if(mid==null||sd==null) return null; const upper=mid+mult*sd, lower=mid-mult*sd; const price=arr[arr.length-1]; const pctB=(upper-lower)?(price-lower)/(upper-lower):0.5; return {mid,upper,lower,sd,pctB}; }
+function roc(arr,p=10){ if(!arr||arr.length<p+1) return null; const cur=arr[arr.length-1], prev=arr[arr.length-1-p]; if(!prev) return null; return (cur-prev)/prev*100; }
+function computeIndicators(closes){
+  if(!closes||closes.length<15) return null;
+  const price=closes[closes.length-1];
+  const m=macd(closes);
+  return {
+    rsi: rsi(closes,14),
+    ema15: ema(closes,15),
+    ema20: ema(closes,20),
+    ema30: ema(closes,30),
+    ema50: ema(closes,50),
+    ema100: ema(closes,100),
+    ema200: ema(closes,200),
+    sma200: sma(closes,200),
+    macd: m,
+    boll: bollinger(closes,20,2),
+    roc: roc(closes,10),
+    price
+  };
+}
+function signalOf(ind){
+  if(!ind) return {label:"—",cls:"na",reasons:[]};
+  let score=0; const reasons=[];
+  const {rsi:r,ema20:e20,ema50:e50,ema100:e100,ema200:e200,sma200:s200,macd:m,boll:bb,roc:rc,price}=ind;
+  if(r!=null){ if(r<35){score+=2;reasons.push("RSI "+r.toFixed(0)+" — oversold (น่าสนใจฝั่งซื้อ)");} else if(r>70){score-=2;reasons.push("RSI "+r.toFixed(0)+" — overbought (ระวังย่อ)");} else reasons.push("RSI "+r.toFixed(0)+" — เป็นกลาง"); }
+  if(e50!=null){ if(price>e50){score+=1;reasons.push("ราคา > EMA50 → โมเมนตัมขาขึ้น");} else {score-=1;reasons.push("ราคา < EMA50 → โมเมนตัมขาลง");} }
+  if(e100!=null){ if(price>e100){score+=1;reasons.push("ราคา > EMA100 → เทรนด์กลางเป็นบวก");} else {score-=1;reasons.push("ราคา < EMA100 → เทรนด์กลางเป็นลบ");} }
+  if(s200!=null){ if(price>s200){score+=1;reasons.push("ราคา > SMA200 → เทรนด์ใหญ่ขาขึ้น");} else {score-=1;reasons.push("ราคา < SMA200 → เทรนด์ใหญ่ขาลง");} }
+  if(m){ if(m.hist>0){score+=1;reasons.push("MACD histogram บวก → momentum ดีขึ้น");} else {score-=1;reasons.push("MACD histogram ลบ → momentum อ่อน");} }
+  // EMA20 vs EMA50 — สัญญาณตัดระยะสั้น
+  if(e20!=null && e50!=null){ if(e20>e50){score+=1;reasons.push("EMA20 > EMA50 → แนวโน้มสั้นเป็นบวก");} else {score-=1;reasons.push("EMA20 < EMA50 → แนวโน้มสั้นเป็นลบ");} }
+  // EMA50 vs EMA200 — Golden Cross / Death Cross (สัญญาณเทรนด์ใหญ่)
+  if(e50!=null && e200!=null){ if(e50>e200){score+=1;reasons.push("EMA50 > EMA200 → Golden Cross (เทรนด์ใหญ่บวก)");} else {score-=1;reasons.push("EMA50 < EMA200 → Death Cross (เทรนด์ใหญ่ลบ)");} }
+  // Bollinger Bands — ราคาแตะขอบล่าง/บน
+  if(bb){
+    if(price<=bb.lower){score+=1;reasons.push("ราคาแตะ Bollinger ขอบล่าง → มีโอกาสเด้ง");}
+    else if(price>=bb.upper){score-=1;reasons.push("ราคาแตะ Bollinger ขอบบน → ตึงตัว/ระวังย่อ");}
+    else reasons.push("ราคาอยู่ในกรอบ Bollinger ("+(bb.pctB*100).toFixed(0)+"%B)");
+  }
+  // ROC 10 วัน — โมเมนตัมรวม
+  if(rc!=null){ if(rc>0){score+=1;reasons.push("ROC 10 วัน +"+rc.toFixed(1)+"% → โมเมนตัมบวก");} else {score-=1;reasons.push("ROC 10 วัน "+rc.toFixed(1)+"% → โมเมนตัมลบ");} }
+  let label="HOLD",cls="hold";
+  if(score>=5){label="BUY";cls="buy";} else if(score<=-4){label="SELL";cls="sell";}
+  return {label,cls,reasons,score};
+}
+/* แผนเข้า "3 ไม้" แบบมืออาชีพ — ผูกแต่ละไม้กับเส้น EMA จริง (ตื้น -> ลึก) ไม่ให้ซ้ำกัน */
+function suggestPro(ind){
+  if(!ind || ind.price==null) return null;
+  const p=ind.price;
+  // ชั้นแนวรับมาตรฐาน เรียงจากตื้น (ใกล้ราคา) ไปลึก
+  const tiers=[
+    {n:"EMA15",  v:ind.ema15},
+    {n:"EMA30",  v:ind.ema30},
+    {n:"EMA50",  v:ind.ema50},
+    {n:"EMA100", v:ind.ema100},
+    {n:"EMA200", v:ind.ema200},
+    {n:"SMA200", v:ind.sma200},
+  ];
+  // ไม้ 1 = แนวรับใกล้ราคาสุด, ไม้ถัดไปต้อง "ลึกกว่าไม้ก่อนหน้า >= 1.2%" (กันเส้นกระจุก/ซ้ำ)
+  const picks=[];
+  let lastP=Infinity;
+  for(const t of tiers){
+    if(t.v==null || t.v>=p*0.999) continue;            // ต้องต่ำกว่าราคาปัจจุบัน
+    if(picks.length===0 || t.v < lastP*0.988){
+      picks.push({price:+t.v.toFixed(2), label:"แนวรับ "+t.n});
+      lastP=t.v;
+    }
+    if(picks.length>=3) break;
+  }
+  // เทรนด์แรง/เส้นอยู่เหนือราคา -> เติมไม้ที่ขาดด้วยการย่อเป็น %
+  const fbPct=[0.99,0.97,0.95];
+  while(picks.length<3){
+    let price=+(p*fbPct[picks.length]).toFixed(2);
+    if(picks.length && price>=picks[picks.length-1].price*0.992) price=+(picks[picks.length-1].price*0.98).toFixed(2);
+    picks.push({price, label:"ย่อตามสัดส่วน"});
+  }
+  picks.sort((a,b)=>b.price-a.price);                   // เรียงตื้น -> ลึก
+  const W=[0.3,0.3,0.4];                                // ไม้ลึก (ของถูก) ลงน้ำหนักมากสุด
+  const entries=picks.slice(0,3).map((x,idx)=>({price:x.price, w:W[idx], note:x.label}));
+  const avg=entries.reduce((s,e)=>s+e.price*e.w,0);     // ต้นทุนเฉลี่ยถ้าเข้าครบ 3 ไม้
+  const e3=entries[entries.length-1].price;
+  // Stop Loss = แนวรับใหญ่ถัดไปใต้ไม้ 3 (EMA100/200/SMA200) ห่างอย่างน้อย 3%
+  const slBase=[ind.ema100,ind.ema200,ind.sma200].filter(x=>x!=null && x<e3*0.999);
+  let sl=slBase.length?Math.max(...slBase):e3*0.96;
+  sl=Math.min(sl,e3*0.97);
+  const risk=avg-sl;                                    // ความเสี่ยงต่อหุ้น (จากต้นทุนเฉลี่ย)
+  const tps=[
+    {price:+(avg+risk*1).toFixed(2), w:0.4,  rr:"1:1"},
+    {price:+(avg+risk*2).toFixed(2), w:0.35, rr:"1:2"},
+    {price:+(avg+risk*3).toFixed(2), w:0.25, rr:"1:3"},
+  ];
+  return {entries, avg:+avg.toFixed(2), sl:+sl.toFixed(2), risk:+risk.toFixed(2), slPct:+(risk/avg*100).toFixed(2), tps};
+}
+/* แผนแบบ field เดียว (ไว้ซิงค์ไป alert + ปุ่มคำนวณทั้งหมด) — ดึงจากแผน 3 ไม้: ไม้1 = จุดเริ่มเข้า */
+function suggestPlan(ind){
+  const pro=suggestPro(ind);
+  if(!pro) return null;
+  return { entry: pro.entries[0].price, sl: pro.sl, tp: pro.tps[1].price };  // เข้าไม้1 / SL ใต้ไม้3 / TP ที่ RR 1:2
+}
+
+/* ---------- fetch via n8n -> Yahoo ---------- */
+async function fetchStocks(symbols, webhookUrl){
+  if(!webhookUrl) throw new Error("NO_WEBHOOK");
+  const sep = webhookUrl.includes("?") ? "&" : "?";
+  const url = webhookUrl + sep + "symbols=" + encodeURIComponent(symbols.join(",")) + "&prepost=1";
+  const res = await fetch(url, {method:"GET"});
+  if(!res.ok) throw new Error("n8n HTTP "+res.status);
+  const data = await res.json();
+  return Array.isArray(data) ? data : [data];
+}
+
+const fmt = (n,d=2)=> n==null||isNaN(n) ? "—" : Number(n).toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d});
+const DEFAULT_WL = ["AAPL","MSFT","NVDA","TSLA","GOOGL","AMZN","META","AMD"].map(s=>({symbol:s,entry:0,sl:0,tp:0,note:""}));
+// เส้น EMA ที่รองรับ (วาดบนกราฟ + ใช้แจ้งเตือนเมื่อราคา "ตัด" เส้น)
+const EMA_DEFS = [
+  {p:15,  c:"#f472b6", label:"EMA15"},
+  {p:30,  c:"#fbbf24", label:"EMA30"},
+  {p:50,  c:"#60a5fa", label:"EMA50"},
+  {p:100, c:"#a78bfa", label:"EMA100"},
+  {p:200, c:"#34d399", label:"EMA200"},
+];
+const DEFAULT_ALERTS = { rsi:true, levels:true, signal:true, summary:true, ema:{15:true,30:false,50:true,100:false,200:true} };
+
+/* ============================================================ APP */
+function App(){
+  const [webhook,setWebhook] = useLS("webhook","");
+  const [autoSec,setAutoSec] = useLS("autoSec",60);
+  const [watch,setWatch] = useLS("watch",DEFAULT_WL);
+  const [positions,setPositions] = useLS("positions",[]);
+  const [live,setLive] = useLS("live",{});        // symbol -> {price,prevClose,closes,...} (cache ไว้ เปิดหน้าใหม่ไม่บอด)
+  const [alertCfg,setAlertCfg] = useLS("alertCfg",DEFAULT_ALERTS);  // สวิตช์เปิด/ปิดแจ้งเตือน Telegram แต่ละชนิด + เส้น EMA
+  function toggleAlert(key,val){ setAlertCfg(prev=>({...prev,[key]:val})); }
+  function toggleEma(p,val){ setAlertCfg(prev=>({...prev,ema:{...prev.ema,[p]:val}})); }
+  const [status,setStatus] = useState({state:"idle",msg:"ยังไม่ซิงค์",time:null});
+  const [loading,setLoading] = useState(false);
+  const [showSet,setShowSet] = useState(false);
+  const [showBackup,setShowBackup] = useState(false);
+  const [detail,setDetail] = useState(null);     // symbol string
+  const [addSym,setAddSym] = useState("");
+  const [theme,setTheme] = useLS("theme","dark");        // สลับธีม สว่าง/มืด (เก็บใน localStorage)
+  const [sortBy,setSortBy] = useState("default");        // เรียง watchlist
+  const [filt,setFilt] = useState("all");                // กรอง watchlist: ทั้งหมด/ขึ้น/ลง
+  useEffect(()=>{ document.documentElement.setAttribute("data-theme",theme); },[theme]);
+
+  const symbols = useMemo(()=>{
+    const s = new Set(watch.map(w=>w.symbol));
+    positions.forEach(p=>s.add(p.symbol));
+    return [...s];
+  },[watch,positions]);
+
+  const refresh = useCallback(async ()=>{
+    if(!webhook){ setShowSet(true); return; }
+    if(symbols.length===0) return;
+    setLoading(true);
+    try{
+      const rows = await fetchStocks(symbols, webhook);
+      const map={};
+      rows.forEach(r=>{ if(r && r.symbol) map[r.symbol.toUpperCase()]=r; });
+      setLive(prev=>({...prev,...map}));
+      const okCount = rows.filter(r=>r&&r.ok!==false&&r.price!=null).length;
+      setStatus({state: okCount>0?"ok":"err", msg: okCount>0? ("โหลด "+okCount+"/"+symbols.length+" ตัว") : "ไม่ได้ข้อมูล", time:new Date()});
+    }catch(e){
+      setStatus({state:"err", msg: e.message==="NO_WEBHOOK"?"ยังไม่ตั้งค่า n8n":("ผิดพลาด: "+e.message), time:new Date()});
+    }finally{ setLoading(false); }
+  },[webhook,symbols]);
+
+  // initial + auto refresh
+  useEffect(()=>{ if(webhook) refresh(); /* eslint-disable-next-line */ },[webhook]);
+  useEffect(()=>{
+    if(!webhook || !autoSec) return;
+    const id=setInterval(refresh, Math.max(30,autoSec)*1000);
+    return ()=>clearInterval(id);
+  },[webhook,autoSec,refresh]);
+  // ออโต้ซิงค์ watchlist + แผนเทรด ไป n8n alert ทุกครั้งที่แก้ (debounce 1.5 วิ)
+  useEffect(()=>{
+    if(!webhook) return;
+    const t=setTimeout(()=>{ syncToAlerts(false); }, 1500);
+    return ()=>clearTimeout(t);
+    /* eslint-disable-next-line */
+  },[watch,alertCfg,webhook]);
+
+  // derived per-symbol bundle
+  const data = useMemo(()=>{
+    const out={};
+    for(const sym of symbols){
+      const l=live[sym];
+      const closes = l && l.closes;
+      const ind = computeIndicators(closes);
+      const price = l ? l.price : null;
+      // %เปลี่ยนรายวัน = เทียบราคาปิด "เมื่อวาน" (closes[-2]) ไม่ใช่ราคา 1 ปีก่อน
+      // closes[-1] คือแท่ง "วันนี้" (live) ที่เท่ากับราคาปัจจุบัน -> ใช้แท่งก่อนหน้าเป็นฐานเทียบ
+      // เกณฑ์เทียบแบบ relative (ไม่ใช่ 1e-6 ที่แน่นเกินไปจน float ลอดได้)
+      let prevC = null;
+      if(closes && closes.length>=2){
+        const last = closes[closes.length-1];
+        const lastIsToday = price!=null && Math.abs(last - price) <= Math.max(price*0.001, 0.02);
+        prevC = lastIsToday ? closes[closes.length-2] : last;
+      }
+      const chg = (price!=null && prevC) ? (price - prevC) : null;
+      const chgPct = (price!=null && prevC) ? (chg / prevC * 100) : null;
+      // ราคานอกเวลาทำการ (post = หลังปิด, pre = ก่อนเปิด) เทียบกับราคาปิดปกติ — ไม่ยุ่งกับ indicator
+      let extra = null;
+      if(l && l.extra && l.extra.price!=null && price!=null){
+        const ex = l.extra;
+        const exChg = ex.price - price;
+        extra = { type: ex.type, price: ex.price, chg: exChg, chgPct: price? (exChg/price*100) : null };
+      }
+      out[sym]={price,chg,chgPct,closes,ind,sig:signalOf(ind),ok:l?l.ok!==false:false,name:l&&l.name,extra};
+    }
+    return out;
+  },[symbols,live]);
+
+  // portfolio KPIs
+  const port = useMemo(()=>{
+    let cost=0,val=0,day=0;
+    positions.forEach(p=>{
+      const d=data[p.symbol]; const px=d&&d.price;
+      cost += p.cost*p.qty;
+      if(px){ val += px*p.qty; if(d.chg) day += d.chg*p.qty; }
+    });
+    return {cost,val,pl:val-cost,plPct: cost?((val-cost)/cost*100):0, day};
+  },[positions,data]);
+
+  // สรุปการเคลื่อนไหววันนี้ของ watchlist (ขึ้นกี่ตัว/ลงกี่ตัว + ตัวเด่น/ตัวร่วงสุด)
+  const movers = useMemo(()=>{
+    let up=0,down=0,best=null,worst=null;
+    watch.forEach(w=>{ const d=data[w.symbol]; if(!d||d.chgPct==null) return;
+      if(d.chgPct>=0) up++; else down++;
+      if(!best||d.chgPct>best.chgPct) best={symbol:w.symbol,chgPct:d.chgPct};
+      if(!worst||d.chgPct<worst.chgPct) worst={symbol:w.symbol,chgPct:d.chgPct};
+    });
+    return {up,down,best,worst};
+  },[watch,data]);
+
+  // watchlist ที่กรอง+เรียงแล้ว (ไม่แตะ watch จริง — แค่ลำดับการแสดงผล)
+  const shownWatch = useMemo(()=>{
+    let arr=[...watch];
+    if(filt!=="all") arr=arr.filter(w=>{ const d=data[w.symbol]; if(!d||d.chgPct==null) return false; return filt==="up"?d.chgPct>=0:d.chgPct<0; });
+    const g=w=>{ const d=data[w.symbol]||{}; const ind=d.ind||{}; return {chg:d.chgPct,rsi:ind.rsi,sig:d.sig&&d.sig.score}; };
+    const n=(v,f)=>v==null?f:v;
+    if(sortBy==="chg")        arr.sort((a,b)=>n(g(b).chg,-1e9)-n(g(a).chg,-1e9));
+    else if(sortBy==="chgUp") arr.sort((a,b)=>n(g(a).chg,1e9)-n(g(b).chg,1e9));
+    else if(sortBy==="rsi")   arr.sort((a,b)=>n(g(b).rsi,-1)-n(g(a).rsi,-1));
+    else if(sortBy==="rsiLow")arr.sort((a,b)=>n(g(a).rsi,999)-n(g(b).rsi,999));
+    else if(sortBy==="sig")   arr.sort((a,b)=>n(g(b).sig,-99)-n(g(a).sig,-99));
+    else if(sortBy==="az")    arr.sort((a,b)=>a.symbol.localeCompare(b.symbol));
+    return arr;
+  },[watch,data,sortBy,filt]);
+
+  async function addSymbol(){
+    const s=addSym.trim().toUpperCase(); if(!s) return;
+    if(watch.some(w=>w.symbol===s)){ setAddSym(""); return; }
+    if(!webhook){ setShowSet(true); return; }
+    // เช็คก่อนว่า Yahoo มีหุ้นตัวนี้จริงไหม — ถ้าไม่เจอจะไม่เพิ่ม (กันพิมพ์ผิดแบบ NAVD/NVDA)
+    setLoading(true);
+    try{
+      const rows = await fetchStocks([s], webhook);
+      const row = rows.find(r=>r&&r.symbol&&r.symbol.toUpperCase()===s) || rows[0];
+      const ok = row && row.ok!==false && row.price!=null;
+      if(!ok){
+        setStatus({state:"err", msg:'ไม่พบหุ้น "'+s+'" ใน Yahoo — เช็คตัวสะกด', time:new Date()});
+        alert('ไม่พบหุ้น "'+s+'" ใน Yahoo Finance\n\n• เช็คตัวสะกดอีกครั้ง (เช่น NVDA ไม่ใช่ NAVD)\n• หุ้นไทยต้องมี .BK ต่อท้าย เช่น PTT.BK, KBANK.BK\n• กองทุน/ETF บางตัวอาจไม่มีใน Yahoo');
+        return;
+      }
+      setWatch([...watch,{symbol:s,entry:0,sl:0,tp:0,note:""}]);
+      setLive(prev=>({...prev,[s]:row}));
+      setAddSym("");
+      setStatus({state:"ok", msg:"เพิ่ม "+s+" แล้ว", time:new Date()});
+    }catch(e){
+      setStatus({state:"err", msg:"เพิ่ม "+s+" ไม่ได้: "+e.message, time:new Date()});
+    }finally{ setLoading(false); }
+  }
+  function removeSym(s){ setWatch(watch.filter(w=>w.symbol!==s)); }
+  function updateWatch(s,patch){ setWatch(watch.map(w=>w.symbol===s?{...w,...patch}:w)); }
+  // คำนวณแผน Entry/SL/TP ใหม่ทุกตัวในครั้งเดียว (RR 1:2 จากอินดิเคเตอร์)
+  function recalcAllPlans(){
+    if(!confirm("คำนวณแผน Entry/SL/TP ใหม่ทั้งหมด (RR 1:2)?\nจะทับค่าที่ตั้งไว้เดิม")) return;
+    let n=0;
+    const next=watch.map(w=>{
+      const d=data[w.symbol];
+      const plan=(d&&d.ind)?suggestPlan(d.ind):null;
+      if(plan){ n++; return {...w, entry:plan.entry, sl:plan.sl, tp:plan.tp}; }
+      return w;
+    });
+    setWatch(next);
+    setStatus({state:"ok",msg:"คำนวณแผนใหม่ "+n+"/"+watch.length+" ตัว (RR 1:2)",time:new Date()});
+  }
+  function updatePos(id,patch){ setPositions(positions.map(p=>p.id===id?{...p,...patch}:p)); }
+
+  // สร้าง payload watchlist (symbols + Entry/SL/TP) ส่งไปให้ workflow แจ้งเตือน
+  function buildSyncPayload(){
+    const levels={};
+    symbols.forEach(s=>{ const w=watch.find(x=>x.symbol===s)||{}; levels[s]={entry:+w.entry||0,sl:+w.sl||0,tp:+w.tp||0}; });
+    const emaWatch=EMA_DEFS.map(d=>d.p).filter(p=>alertCfg.ema&&alertCfg.ema[p]);
+    return {
+      levels,
+      alerts:{ rsi:!!alertCfg.rsi, levels:!!alertCfg.levels, signal:!!alertCfg.signal, summary:!!alertCfg.summary, ema: emaWatch.length>0 },
+      emaWatch
+    };
+  }
+  // สร้างข้อความ config.json สำหรับ GitHub Actions (watchlist + Entry/SL/TP ปัจจุบัน) เอาไปวางทับบน repo
+  function buildConfigJson(){
+    const p = buildSyncPayload();
+    const cfg = {
+      rsiHigh: 70, rsiLow: 30, tolPct: 0.5, summaryHourThai: 21,
+      alerts: p.alerts, emaWatch: p.emaWatch, chatId: "6863254438", levels: p.levels
+    };
+    return JSON.stringify(cfg, null, 2);
+  }
+  async function copyConfigJson(){
+    const text = buildConfigJson();
+    try{
+      await navigator.clipboard.writeText(text);
+      setStatus({state:"ok",msg:"คัดลอก config.json แล้ว ("+symbols.length+" หุ้น) → ไปวางทับบน GitHub",time:new Date()});
+    }catch(e){
+      window.prompt("คัดลอกข้อความนี้ (Ctrl+C) ไปวางทับ config.json บน GitHub:", text);
+    }
+  }
+  // URL ของ webhook /sync — เดามาจาก webhook /stocks (โดเมน n8n เดียวกัน)
+  function syncUrlFrom(u){ return u ? u.replace(/\/stocks(\?.*)?$/,"/sync") : ""; }
+  // ส่ง watchlist ไปเก็บใน n8n → Telegram alert จะเฝ้าหุ้นชุดนี้อัตโนมัติ (ไม่ต้องแก้โค้ด)
+  async function syncToAlerts(manual){
+    if(!webhook){ if(manual) setShowSet(true); return; }
+    const url=syncUrlFrom(webhook);
+    if(!url || url===webhook){ if(manual){ alert("Webhook URL ต้องลงท้าย /stocks ระบบถึงจะหา /sync เจอ"); } return; }
+    try{
+      const res=await fetch(url,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify(buildSyncPayload())});
+      let n=symbols.length; try{ const j=await res.json(); if(j&&j.count!=null) n=j.count; }catch(e){}
+      if(manual) setStatus({state:"ok",msg:"ซิงค์ "+n+" หุ้นไป n8n alert แล้ว",time:new Date()});
+    }catch(e){
+      if(manual) setStatus({state:"err",msg:"ซิงค์ alert ไม่ได้: "+e.message+" (เช็คว่า workflow แจ้งเตือน Active แล้ว)",time:new Date()});
+    }
+  }
+
+  return (
+    <div className="wrap">
+      <div className="topbar">
+        <div className="brand">
+          <div className="mark">📈</div>
+          <div><h1 className="head-font">Stock Dashboard</h1><p>ARIA · YAHOO via Cloudflare</p></div>
+        </div>
+        <div className="toolbar">
+          <div className="status">
+            <span className={"dot "+(status.state==="ok"?"ok":status.state==="err"?"err":"idle")}></span>
+            {status.msg}{status.time && <span style={{color:"var(--dim)"}}>· {status.time.toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit"})}</span>}
+          </div>
+          <button className="btn ghost sm" onClick={refresh} disabled={loading}>{loading?"กำลังโหลด…":"↻ Sync"}</button>
+          <button className="btn ghost sm" onClick={()=>setShowBackup(true)} title="สำรอง/กู้คืน watchlist + การตั้งค่า — ใช้ย้ายข้อมูลข้ามเครื่อง/ข้ามเวอร์ชันที่ host">💾 สำรอง/กู้คืน</button>
+          <button className="btn ghost sm" onClick={()=>setTheme(theme==="dark"?"light":"dark")} title={theme==="dark"?"สลับเป็นธีมสว่าง":"สลับเป็นธีมมืด"}>{theme==="dark"?"☀️":"🌙"}</button>
+          <button className="btn ghost sm" onClick={()=>setShowSet(true)}>⚙ ตั้งค่า</button>
+        </div>
+      </div>
+
+      {!webhook &&
+        <div className="banner">
+          <h3>🔌 ตั้งค่า n8n → Yahoo ก่อนเริ่ม (ฟรี ครั้งเดียว)</h3>
+          <p style={{fontSize:13.5,color:"#cdd3df"}}>Dashboard นี้ดึงราคาหุ้นจริงผ่าน n8n ที่ยิงไป Yahoo Finance — ไม่ต้องมี API key, ไม่ติด rate limit</p>
+          <ol>
+            <li>เปิด n8n → <b>Import from File</b> → เลือก <code>n8n/yahoo-stocks-proxy.json</code></li>
+            <li>กด <b>Active</b> (เปิดสวิตช์ขวาบน) แล้วก๊อป <b>Production URL</b> ของ Webhook (ลงท้าย <code>/webhook/stocks</code>)</li>
+            <li>กด <b>⚙ ตั้งค่า</b> ที่มุมขวาบน → วาง URL → Save</li>
+          </ol>
+          <button className="btn" style={{marginTop:14}} onClick={()=>setShowSet(true)}>⚙ ใส่ URL เลย</button>
+        </div>
+      }
+
+      {/* KPIs */}
+      <div className="kpis">
+        <div className="kpi"><div className="lab">มูลค่าพอร์ต</div><div className="val mono">${fmt(port.val,0)}</div><div className="meta">ต้นทุน ${fmt(port.cost,0)}</div></div>
+        <div className="kpi"><div className="lab">กำไร/ขาดทุนรวม</div><div className={"val mono "+(port.pl>=0?"up":"down")}>{port.pl>=0?"+":""}${fmt(port.pl,0)}</div><div className="meta">{port.pl>=0?"+":""}{fmt(port.plPct)}%</div></div>
+        <div className="kpi"><div className="lab">วันนี้</div><div className={"val mono "+(port.day>=0?"up":"down")}>{port.day>=0?"+":""}${fmt(port.day,0)}</div><div className="meta">เปลี่ยนแปลงวันนี้</div></div>
+        <div className="kpi"><div className="lab">เฝ้าดู</div><div className="val mono">{watch.length}</div><div className="meta"><span className="up">▲{movers.up}</span> <span className="down">▼{movers.down}</span> · ถือ {positions.length}</div></div>
+        <div className="kpi"><div className="lab">ตัวเด่นวันนี้</div><div className="val mono" style={{fontSize:22}}>{movers.best?movers.best.symbol:"—"}</div><div className={"meta "+(movers.best&&movers.best.chgPct>=0?"up":"down")}>{movers.best?(movers.best.chgPct>=0?"+":"")+fmt(movers.best.chgPct)+"% วันนี้":"ยังไม่มีข้อมูล"}</div></div>
+      </div>
+
+      {/* Watchlist */}
+      <div className="section">
+        <div className="sh">
+          <h3>👁️ Watchlist</h3>
+          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <button className="btn ghost sm" onClick={recalcAllPlans} title="คำนวณ Entry (โซนย่อ) / SL / TP ใหม่ให้ทุกตัวในครั้งเดียว แบบ RR 1:2">✨ คำนวณแผนทั้งหมด</button>
+            <button className="btn ghost sm" onClick={()=>syncToAlerts(true)} title="ส่งรายชื่อหุ้น + Entry/SL/TP ไปให้ n8n alert เดี๋ยวนี้ (ปกติซิงค์อัตโนมัติอยู่แล้ว)">🔄 ซิงค์ alert</button>
+            <button className="btn ghost sm" onClick={copyConfigJson} title="คัดลอกข้อความ config.json (watchlist + Entry/SL/TP ปัจจุบัน) เอาไปวางทับ config.json บน GitHub repo สำหรับ alert แบบ GitHub Actions">📋 Copy config.json</button>
+            <div className="add-row" style={{maxWidth:320}}>
+              <input className="inp" placeholder="เพิ่มหุ้น เช่น NFLX, KO, PTT.BK" value={addSym}
+                onChange={e=>setAddSym(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addSymbol()}/>
+              <button className="btn sm" onClick={addSymbol}>+ เพิ่ม</button>
+            </div>
+          </div>
+        </div>
+        <div className="wl-tools">
+          <div className="seg">
+            <button className={filt==="all"?"on":""} onClick={()=>setFilt("all")}>ทั้งหมด</button>
+            <button className={filt==="up"?"on":""} onClick={()=>setFilt("up")}>▲ ขึ้น</button>
+            <button className={filt==="down"?"on":""} onClick={()=>setFilt("down")}>▼ ลง</button>
+          </div>
+          <select className="inp sel" value={sortBy} onChange={e=>setSortBy(e.target.value)} title="เรียงลำดับ watchlist">
+            <option value="default">เรียง: ตามที่เพิ่ม</option>
+            <option value="chg">% เปลี่ยน มาก → น้อย</option>
+            <option value="chgUp">% เปลี่ยน น้อย → มาก</option>
+            <option value="rsi">RSI สูง → ต่ำ</option>
+            <option value="rsiLow">RSI ต่ำ → สูง</option>
+            <option value="sig">สัญญาณ (ซื้อก่อน)</option>
+            <option value="az">ชื่อ A → Z</option>
+          </select>
+          <span className="wl-count">{shownWatch.length}/{watch.length} ตัว</span>
+        </div>
+        <div style={{overflowX:"auto"}}>
+        <table>
+          <thead><tr>
+            <th>หุ้น</th><th className="num">ราคา</th><th className="num">เปลี่ยน</th>
+            <th className="num hide-sm">RSI</th><th className="hide-sm">กราฟ 3 ด.</th>
+            <th>สัญญาณ</th><th className="num hide-sm">Entry / SL / TP</th><th></th>
+          </tr></thead>
+          <tbody>
+            {shownWatch.map(w=>{
+              const d=data[w.symbol]||{};
+              const ind=d.ind, sig=d.sig||{label:"—",cls:"na"};
+              const rsiVal=ind&&ind.rsi;
+              const rsiCol = rsiVal==null?"#646b7a": rsiVal>70?"#f87171": rsiVal<35?"#4ade80":"#9aa3b2";
+              return (
+                <tr key={w.symbol} className="click" onClick={()=>setDetail(w.symbol)}>
+                  <td><span className="sym">{w.symbol}</span></td>
+                  <td className="num mono">
+                    {d.price!=null?fmt(d.price):"—"}
+                    {d.extra && <div className={"ah "+(d.extra.chg>=0?"up":"down")} title={d.extra.type==="pre"?"ก่อนเปิดตลาด":"หลังปิดตลาด"}>
+                      {d.extra.type==="pre"?"pre ":"post "}{fmt(d.extra.price)} {d.extra.chg>=0?"▲":"▼"}{d.extra.chgPct!=null?fmt(Math.abs(d.extra.chgPct))+"%":""}
+                    </div>}
+                  </td>
+                  <td className={"num mono "+(d.chgPct>=0?"up":"down")}>{d.chgPct!=null?(d.chgPct>=0?"+":"")+fmt(d.chgPct)+"%":"—"}</td>
+                  <td className="num hide-sm">{rsiVal!=null?<span className="rsi-b mono" style={{color:rsiCol,background:rsiCol+"18"}}>{rsiVal.toFixed(0)}</span>:"—"}</td>
+                  <td className="hide-sm"><Spark data={d.closes} color={d.chgPct>=0?"#4ade80":"#f87171"}/></td>
+                  <td><span className={"pill "+sig.cls}>{sig.label}</span></td>
+                  <td className="num mono hide-sm" style={{color:"var(--muted)",fontSize:12.5}}>
+                    {(w.entry||w.sl||w.tp)? `${fmt(w.entry)}/${fmt(w.sl)}/${fmt(w.tp)}` : <span style={{color:"var(--dim)"}}>—</span>}
+                  </td>
+                  <td className="num" onClick={e=>e.stopPropagation()}>
+                    <button className="btn danger sm" onClick={()=>removeSym(w.symbol)}>✕</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        </div>
+        {watch.length===0 && <div className="empty">ยังไม่มีหุ้นใน watchlist — เพิ่มด้านบน</div>}
+        {watch.length>0 && shownWatch.length===0 && <div className="empty">ไม่มีหุ้นตรงตามตัวกรอง — ลองเปลี่ยนเป็น "ทั้งหมด"</div>}
+      </div>
+
+      {/* Positions */}
+      <Positions positions={positions} setPositions={setPositions} updatePos={updatePos} data={data}/>
+
+      {/* Telegram alert switches */}
+      <div className="section">
+        <div className="sh">
+          <h3>🔔 แจ้งเตือนเข้า Telegram</h3>
+          <span style={{fontSize:12,color:"var(--dim)"}}>{webhook? "สลับสวิตช์แล้วซิงค์ไป n8n อัตโนมัติ" : "ตั้งค่า webhook ก่อนใช้งาน"}</span>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"4px 18px",padding:"4px 2px"}}>
+          <Toggle on={!!alertCfg.rsi}     onChange={v=>toggleAlert("rsi",v)}     label="RSI เข้าโซน overbought/oversold"/>
+          <Toggle on={!!alertCfg.levels}  onChange={v=>toggleAlert("levels",v)}  label="แตะ Entry / หลุด SL / ถึง TP"/>
+          <Toggle on={!!alertCfg.signal}  onChange={v=>toggleAlert("signal",v)}  label="สัญญาณเปลี่ยน BUY / SELL"/>
+          <Toggle on={!!alertCfg.summary} onChange={v=>toggleAlert("summary",v)} label="สรุปตลาดประจำวัน (21:00)"/>
+        </div>
+        <div style={{borderTop:"1px solid var(--line,#1c2230)",margin:"12px 0 10px"}}></div>
+        <div style={{fontSize:12.5,color:"var(--muted)",marginBottom:6}}>แจ้งเตือนเมื่อราคา <b>ตัดผ่านเส้น EMA</b> (เปิดเส้นไหน เส้นนั้นจะโชว์บนกราฟด้วย)</div>
+        <div style={{display:"flex",gap:"4px 22px",flexWrap:"wrap"}}>
+          {EMA_DEFS.map(d=>(
+            <Toggle key={d.p} color={d.c} on={!!(alertCfg.ema&&alertCfg.ema[d.p])} onChange={v=>toggleEma(d.p,v)}
+              label={<span><span style={{color:d.c}}>●</span> {d.label}</span>}/>
+          ))}
+        </div>
+      </div>
+
+      {detail && <DetailModal w={watch.find(x=>x.symbol===detail)} d={data[detail]} onClose={()=>setDetail(null)}
+                   alertCfg={alertCfg} toggleEma={toggleEma}
+                   onSave={patch=>{updateWatch(detail,patch);}} onAddPos={(p)=>setPositions([...positions,p])}/>}
+      {showSet && <SettingsModal webhook={webhook} setWebhook={setWebhook} autoSec={autoSec} setAutoSec={setAutoSec}
+                   onClose={()=>setShowSet(false)} onTest={refresh}/>}
+      {showBackup && <BackupModal onClose={()=>setShowBackup(false)}/>}
+    </div>
+  );
+}
+
+/* ---------- sparkline ---------- */
+function Spark({data,color="#60a5fa",w=92,h=30}){
+  if(!data||data.length<3) return <span style={{color:"var(--dim)"}}>—</span>;
+  const d=data.slice(-60);
+  const min=Math.min(...d),max=Math.max(...d),rng=(max-min)||1;
+  const pts=d.map((v,i)=>`${(i/(d.length-1))*w},${h-((v-min)/rng)*(h-4)-2}`).join(" ");
+  return <svg width={w} height={h} style={{display:"block"}}><polyline points={pts} fill="none" stroke={color} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round"/></svg>;
+}
+
+/* ---------- toggle switch ---------- */
+function Toggle({on,onChange,label,color="#22c55e"}){
+  return (
+    <button type="button" onClick={()=>onChange(!on)}
+      style={{display:"flex",alignItems:"center",gap:9,background:"none",border:"none",cursor:"pointer",padding:"5px 0",textAlign:"left"}}>
+      <span style={{width:38,height:22,borderRadius:11,background:on?color:"var(--track)",position:"relative",transition:"background .15s",flexShrink:0,display:"inline-block"}}>
+        <span style={{position:"absolute",top:2,left:on?18:2,width:18,height:18,borderRadius:"50%",background:"#fff",transition:"left .15s",boxShadow:"0 1px 2px rgba(0,0,0,.4)"}}></span>
+      </span>
+      <span style={{fontSize:13,color:on?"var(--txt)":"var(--dim)"}}>{label}</span>
+    </button>
+  );
+}
+
+/* ---------- price + EMA multi-line chart ---------- */
+function EmaChart({closes, show, w=560, h=240}){
+  if(!closes||closes.length<20) return <div className="empty">ข้อมูลไม่พอวาดกราฟ (ต้องมีอย่างน้อย 20 วัน)</div>;
+  const N=Math.min(closes.length,160);
+  const start=closes.length-N;
+  const px=closes.slice(start);
+  const series=EMA_DEFS.filter(d=>show[d.p]).map(d=>({...d, vals: emaFull(closes,d.p).slice(start)}));
+  let all=[...px];
+  series.forEach(s=>s.vals.forEach(v=>{ if(v!=null) all.push(v); }));
+  const min=Math.min(...all), max=Math.max(...all), rng=(max-min)||1;
+  const padX=8, padT=10, padB=10;
+  const X=i=> padX + (i/(N-1))*(w-padX*2);
+  const Y=v=> padT + (1-(v-min)/rng)*(h-padT-padB);
+  const linePts=arr=> arr.map((v,i)=> v==null?null:(X(i).toFixed(1)+","+Y(v).toFixed(1))).filter(Boolean).join(" ");
+  const up = px[px.length-1] >= px[0];
+  const priceCol = up?"#4ade80":"#f87171";
+  const areaPts = "" + X(0).toFixed(1)+","+(h-padB) + " " + linePts(px) + " " + X(N-1).toFixed(1)+","+(h-padB);
+  return (
+    <div>
+      <svg width="100%" viewBox={"0 0 "+w+" "+h} style={{display:"block",background:"var(--chartbg)",borderRadius:10,border:"1px solid var(--line)"}}>
+        <polygon points={areaPts} fill={priceCol} opacity="0.07"/>
+        <polyline points={linePts(px)} fill="none" stroke={priceCol} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round"/>
+        {series.map(s=> <polyline key={s.p} points={linePts(s.vals)} fill="none" stroke={s.c} strokeWidth="1.4" strokeLinejoin="round" strokeLinecap="round" opacity="0.95"/>)}
+      </svg>
+      <div style={{display:"flex",gap:14,flexWrap:"wrap",marginTop:8,fontSize:11.5}}>
+        <span style={{display:"flex",alignItems:"center",gap:5,color:"var(--muted)"}}><span style={{width:14,height:3,borderRadius:2,background:priceCol,display:"inline-block"}}></span>ราคา</span>
+        {series.map(s=>(
+          <span key={s.p} style={{display:"flex",alignItems:"center",gap:5,color:"var(--muted)"}}>
+            <span style={{width:14,height:3,borderRadius:2,background:s.c,display:"inline-block"}}></span>
+            {s.label} <span className="mono" style={{color:s.c}}>{s.vals[s.vals.length-1]!=null?fmt(s.vals[s.vals.length-1]):"—"}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- positions ---------- */
+function Positions({positions,setPositions,updatePos,data}){
+  const [add,setAdd]=useState(false);
+  const [f,setF]=useState({symbol:"",qty:0,cost:0});
+  const cell={padding:"4px 6px",fontSize:13,height:30};
+  const totalVal=positions.reduce((s,p)=>{ const px=data[p.symbol]&&data[p.symbol].price; return s+(px?px*p.qty:0); },0);
+  function save(){ if(!f.symbol||!f.qty) return; setPositions([...positions,{...f,id:Date.now(),symbol:f.symbol.toUpperCase()}]); setF({symbol:"",qty:0,cost:0}); setAdd(false); }
+  function del(id){ if(confirm("ลบโพสิชั่นนี้?")) setPositions(positions.filter(p=>p.id!==id)); }
+  return (
+    <div className="section">
+      <div className="sh"><h3>💼 พอร์ตที่ถืออยู่</h3><button className="btn sm" onClick={()=>setAdd(true)}>+ เพิ่มโพสิชั่น</button></div>
+      {positions.length===0 ? <div className="empty">ยังไม่มีหุ้นที่ถือ — กด "เพิ่มโพสิชั่น" เพื่อบันทึกที่ซื้อไว้</div> :
+        <div style={{overflowX:"auto"}}><table>
+          <thead><tr><th>หุ้น</th><th className="num">จำนวน</th><th className="num">ต้นทุน</th><th className="num">ราคาnow</th><th className="num">มูลค่า</th><th className="num hide-sm">%พอร์ต</th><th className="num">กำไร/ขาดทุน</th><th></th></tr></thead>
+          <tbody>
+            {positions.map(p=>{
+              const px=(data[p.symbol]&&data[p.symbol].price)||null;
+              const val=px?px*p.qty:null, pl=px?(px-p.cost)*p.qty:null, plPct=px?((px-p.cost)/p.cost*100):null;
+              return (
+                <tr key={p.id}>
+                  <td><input className="inp mono" style={{...cell,width:84,textTransform:"uppercase"}} value={p.symbol}
+                       onChange={e=>updatePos(p.id,{symbol:e.target.value.toUpperCase()})} title="แก้ชื่อหุ้นได้ตรงนี้"/></td>
+                  <td className="num"><input className="inp mono" type="number" style={{...cell,width:96,textAlign:"right"}} value={p.qty||""}
+                       onChange={e=>updatePos(p.id,{qty:+e.target.value})}/></td>
+                  <td className="num"><input className="inp mono" type="number" style={{...cell,width:96,textAlign:"right"}} value={p.cost||""}
+                       onChange={e=>updatePos(p.id,{cost:+e.target.value})}/></td>
+                  <td className="num mono">{px!=null?fmt(px):"—"}</td>
+                  <td className="num mono">{val!=null?"$"+fmt(val,0):"—"}</td>
+                  <td className="num hide-sm">{val!=null&&totalVal>0?
+                    <div style={{display:"flex",alignItems:"center",gap:7,justifyContent:"flex-end"}}>
+                      <div className="alloc"><span style={{width:Math.min(100,val/totalVal*100)+"%"}}></span></div>
+                      <span className="mono" style={{fontSize:12,color:"var(--muted)"}}>{fmt(val/totalVal*100,0)}%</span>
+                    </div> : <span style={{color:"var(--dim)"}}>—</span>}</td>
+                  <td className={"num mono "+(pl>=0?"up":"down")}>{pl!=null?(pl>=0?"+":"")+"$"+fmt(pl,0)+" ("+(plPct>=0?"+":"")+fmt(plPct)+"%)":"—"}</td>
+                  <td className="num"><button className="btn danger sm" onClick={()=>del(p.id)}>✕</button></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table></div>
+      }
+      {add && (
+        <div className="overlay" onClick={()=>setAdd(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:420}}>
+            <h3>เพิ่มโพสิชั่น</h3><div className="msub">บันทึกหุ้นที่ซื้อไว้เพื่อคำนวณกำไรสด</div>
+            <div className="field"><label>สัญลักษณ์หุ้น</label><input className="inp" value={f.symbol} onChange={e=>setF({...f,symbol:e.target.value})} placeholder="AAPL"/></div>
+            <div className="row3">
+              <div className="field"><label>จำนวนหุ้น</label><input className="inp" type="number" value={f.qty||""} onChange={e=>setF({...f,qty:+e.target.value})}/></div>
+              <div className="field" style={{gridColumn:"span 2"}}><label>ราคาทุน/หุ้น</label><input className="inp" type="number" value={f.cost||""} onChange={e=>setF({...f,cost:+e.target.value})}/></div>
+            </div>
+            <div className="modal-acts"><button className="btn ghost" onClick={()=>setAdd(false)}>ยกเลิก</button><button className="btn" onClick={save}>บันทึก</button></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- pro 3-tranche scale-in plan ---------- */
+function ProPlan({ind}){
+  const plan = ind ? suggestPro(ind) : null;
+  if(!plan) return null;
+  const box={background:"var(--panel2)",border:"1px solid var(--line)",borderRadius:12,padding:"13px 15px",marginTop:16};
+  const th={textAlign:"left",fontSize:11,color:"var(--dim)",fontWeight:600,padding:"3px 6px"};
+  const td={padding:"6px 6px",fontSize:13};
+  const rowSty={borderTop:"1px solid var(--line)"};
+  return (
+    <div style={box}>
+      <div style={{fontSize:13.5,fontWeight:700}}>📐 แผนเข้า 3 ไม้ (Scale-in มืออาชีพ)</div>
+      <div style={{fontSize:11.5,color:"var(--dim)",margin:"2px 0 9px"}}>ไม่เข้าหมดหน้าตักไม้เดียว — ทยอยซื้อตามแนวรับ ถัวต้นทุนให้ต่ำ คุมความเสี่ยง แล้วทยอยขายทำกำไรเป็นชั้น</div>
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <thead><tr>
+          <th style={th}>ไม้</th><th style={{...th,textAlign:"right"}}>ราคาเข้า</th>
+          <th style={{...th,textAlign:"right"}}>สัดส่วน</th><th style={th}>อิงแนวรับ</th>
+        </tr></thead>
+        <tbody>
+          {plan.entries.map((e,i)=>(
+            <tr key={i} style={rowSty}>
+              <td style={{...td,color:"#60a5fa",fontWeight:700}}>ไม้ {i+1}</td>
+              <td style={{...td,textAlign:"right"}} className="mono">${fmt(e.price)}</td>
+              <td style={{...td,textAlign:"right"}} className="mono">{(e.w*100).toFixed(0)}%</td>
+              <td style={{...td,color:"var(--muted)",fontSize:11.5}}>{e.note}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{display:"flex",flexWrap:"wrap",gap:"5px 18px",marginTop:10,fontSize:12.5,alignItems:"center"}}>
+        <span>ต้นทุนเฉลี่ย (ครบ 3 ไม้): <b className="mono" style={{color:"#fcd34d"}}>${fmt(plan.avg)}</b></span>
+        <span>Stop Loss: <b className="mono" style={{color:"#f87171"}}>${fmt(plan.sl)}</b> <span style={{color:"var(--dim)"}}>(เสี่ยง ${fmt(plan.risk)}/หุ้น · -{fmt(plan.slPct)}%)</span></span>
+      </div>
+      <div style={{marginTop:9,fontSize:12.5}}>
+        <div style={{color:"var(--dim)",marginBottom:4}}>เป้าทำกำไร — ทยอยขายออก (scale-out):</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:"5px 16px"}}>
+          {plan.tps.map((t,i)=>(
+            <span key={i}>TP{i+1} <span style={{color:"var(--dim)"}}>{t.rr}</span> <b className="mono" style={{color:"#4ade80"}}>${fmt(t.price)}</b> <span style={{color:"var(--dim)"}}>ขาย {(t.w*100).toFixed(0)}%</span></span>
+          ))}
+        </div>
+      </div>
+      <div style={{fontSize:11,color:"var(--dim)",marginTop:9,lineHeight:1.5}}>
+        💡 วิธีใช้: ตั้ง alert ที่ <b>ไม้ 1</b> เป็นจุดเริ่มทยอยเข้า · เลื่อน SL ขึ้นมาที่ต้นทุนเมื่อถึง TP1 (ปิดความเสี่ยง) · ขายบางส่วนทุกเป้าเพื่อล็อกกำไร
+      </div>
+    </div>
+  );
+}
+
+/* ---------- detail modal ---------- */
+function DetailModal({w,d,onClose,onSave,onAddPos,alertCfg,toggleEma}){
+  const ind=d&&d.ind, sig=(d&&d.sig)||{label:"—",cls:"na",reasons:[]};
+  const emaShow=(alertCfg&&alertCfg.ema)||{};
+  const [entry,setEntry]=useState(w.entry||"");
+  const [sl,setSl]=useState(w.sl||"");
+  const [tp,setTp]=useState(w.tp||"");
+  const [note,setNote]=useState(w.note||"");
+  function autoFill(){ const p=suggestPlan(ind); if(p){setEntry(p.entry);setSl(p.sl);setTp(p.tp);} }
+  function save(){ onSave({entry:+entry||0,sl:+sl||0,tp:+tp||0,note}); onClose(); }
+  const rr = (entry&&sl&&tp)&&(entry-sl)>0 ? ((tp-entry)/(entry-sl)).toFixed(2) : null;
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+          <div><h3 className="head-font">{w.symbol} <span className={"pill "+sig.cls}>{sig.label}</span></h3>
+            <div className="msub">{d&&d.name?d.name:""} {d&&d.price!=null?" · $"+fmt(d.price):""} {d&&d.chgPct!=null?<span className={d.chgPct>=0?"up":"down"}> ({d.chgPct>=0?"+":""}{fmt(d.chgPct)}%)</span>:""}
+              {d&&d.extra && <span className={d.extra.chg>=0?"up":"down"} style={{marginLeft:8}}>· {d.extra.type==="pre"?"ก่อนเปิด":"หลังปิด"} ${fmt(d.extra.price)} {d.extra.chg>=0?"▲":"▼"}{d.extra.chgPct!=null?fmt(Math.abs(d.extra.chgPct))+"%":""}</span>}</div>
+          </div>
+        </div>
+
+        {/* ปุ่มสลับเส้น EMA บนกราฟ (= เส้นที่จะแจ้งเตือนด้วย) */}
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",margin:"10px 0 8px"}}>
+          {EMA_DEFS.map(dd=>{ const on=!!(emaShow&&emaShow[dd.p]); return (
+            <button key={dd.p} type="button" onClick={()=>toggleEma&&toggleEma(dd.p,!on)}
+              style={{fontSize:11.5,padding:"3px 9px",borderRadius:20,cursor:"pointer",
+                border:"1px solid "+(on?dd.c:"#2a3140"), background:on?dd.c+"22":"transparent",
+                color:on?dd.c:"var(--dim)"}}>● {dd.label}</button>
+          );})}
+        </div>
+        <div style={{margin:"2px 0 14px"}}><EmaChart closes={d&&d.closes} show={emaShow} w={560} h={230}/></div>
+
+        <div className="ind-grid">
+          <div className="ind"><div className="l">RSI (14)</div><div className="v mono">{ind&&ind.rsi!=null?ind.rsi.toFixed(1):"—"}</div></div>
+          <div className="ind"><div className="l">MACD hist</div><div className="v mono">{ind&&ind.macd?ind.macd.hist.toFixed(2):"—"}</div></div>
+          <div className="ind"><div className="l">EMA 15 / 30</div><div className="v mono">{ind&&ind.ema15!=null?fmt(ind.ema15):"—"} / {ind&&ind.ema30!=null?fmt(ind.ema30):"—"}</div></div>
+          <div className="ind"><div className="l">EMA 50 / 100</div><div className="v mono">{ind&&ind.ema50!=null?fmt(ind.ema50):"—"} / {ind&&ind.ema100!=null?fmt(ind.ema100):"—"}</div></div>
+          <div className="ind"><div className="l">EMA 200</div><div className="v mono">{ind&&ind.ema200!=null?fmt(ind.ema200):"—"}</div></div>
+          <div className="ind"><div className="l">SMA 200</div><div className="v mono">{ind&&ind.sma200!=null?fmt(ind.sma200):"—"}</div></div>
+          <div className="ind"><div className="l">Bollinger %B</div><div className="v mono">{ind&&ind.boll?(ind.boll.pctB*100).toFixed(0)+"%":"—"}</div></div>
+          <div className="ind"><div className="l">ROC (10 ว.)</div><div className="v mono">{ind&&ind.roc!=null?(ind.roc>=0?"+":"")+ind.roc.toFixed(1)+"%":"—"}</div></div>
+        </div>
+
+        {sig.reasons&&sig.reasons.length>0 &&
+          <div className="reason"><b>เหตุผลสัญญาณ:</b><ul>{sig.reasons.map((r,i)=><li key={i}>{r}</li>)}</ul></div>}
+
+        <ProPlan ind={ind}/>
+
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",margin:"18px 0 8px"}}>
+          <label style={{fontSize:13,color:"var(--muted)"}}>แผนเทรด (Entry / SL / TP) — สำหรับตั้ง alert</label>
+          <button className="btn ghost sm" onClick={autoFill} title="ดึงค่าจากแผน 3 ไม้: Entry = ไม้ 1 (จุดเริ่มเข้า), SL ใต้ไม้ 3, TP ที่ RR 1:2">✨ ดึงจากแผน 3 ไม้</button>
+        </div>
+        <div className="row3">
+          <div className="field"><label>Entry</label><input className="inp mono" type="number" value={entry} onChange={e=>setEntry(e.target.value)}/></div>
+          <div className="field"><label>Stop Loss</label><input className="inp mono" type="number" value={sl} onChange={e=>setSl(e.target.value)}/></div>
+          <div className="field"><label>Take Profit</label><input className="inp mono" type="number" value={tp} onChange={e=>setTp(e.target.value)}/></div>
+        </div>
+        {rr && <div style={{fontSize:12.5,color:"var(--muted)",marginTop:-4}}>Risk/Reward = <b style={{color: rr>=2?"#4ade80":"#fcd34d"}}>1:{rr}</b></div>}
+        <div className="field" style={{marginTop:12}}><label>โน้ต</label><input className="inp" value={note} onChange={e=>setNote(e.target.value)} placeholder="เช่น รอเบรค 195 / ดูงบ Q2"/></div>
+
+        <div className="modal-acts">
+          <button className="btn ghost" onClick={()=>{ if(d&&d.price){onAddPos({id:Date.now(),symbol:w.symbol,qty:1,cost:d.price}); alert("เพิ่มเข้าพอร์ต 1 หุ้น @ "+fmt(d.price)+" (แก้จำนวนได้ในตารางพอร์ต)");} }}>+ เข้าพอร์ต</button>
+          <button className="btn ghost" onClick={onClose}>ปิด</button>
+          <button className="btn" onClick={save}>บันทึกแผน</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- settings ---------- */
+// สำรอง/กู้คืนข้อมูล localStorage (ย้ายข้ามเครื่อง/ข้ามเวอร์ชันที่ host) — ไม่รวม cache ราคา (live) เพราะโหลดใหม่ได้เอง
+const BACKUP_KEYS = ["webhook","autoSec","watch","positions","alertCfg"];
+function BackupModal({onClose}){
+  const [txt,setTxt]=useState(()=>{
+    const o={}; BACKUP_KEYS.forEach(k=>{ const v=localStorage.getItem(LS+k); if(v!=null) o[k]=v; });
+    return JSON.stringify(o,null,2);
+  });
+  const [msg,setMsg]=useState("");
+  async function copy(){
+    try{ await navigator.clipboard.writeText(txt); setMsg("✅ คัดลอกแล้ว — เปิด Dashboard เวอร์ชันปลายทาง กดปุ่มนี้ วางทับในกล่อง แล้วกด \"กู้คืน\""); }
+    catch(e){ setMsg("คัดลอกอัตโนมัติไม่ได้ — คลิกในกล่อง กด Ctrl+A แล้ว Ctrl+C เอง"); }
+  }
+  function restore(){
+    let o; try{ o=JSON.parse(txt); }catch(e){ setMsg("❌ ข้อความไม่ใช่ JSON ที่ถูกต้อง"); return; }
+    if(!o || typeof o!=="object" || Array.isArray(o)){ setMsg("❌ รูปแบบข้อมูลไม่ถูกต้อง"); return; }
+    if(!confirm("กู้คืนข้อมูลนี้ทับของเดิมในเครื่องนี้? หน้าจะรีโหลดใหม่")) return;
+    BACKUP_KEYS.forEach(k=>{ if(o[k]!=null) localStorage.setItem(LS+k, typeof o[k]==="string"?o[k]:JSON.stringify(o[k])); });
+    location.reload();
+  }
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()}>
+        <h3>💾 สำรอง / กู้คืนข้อมูล</h3>
+        <div className="msub">ย้าย watchlist · Entry/SL/TP · webhook · พอร์ต · การตั้งค่า ข้ามเครื่อง/ข้ามเวอร์ชันที่ host<br/>เครื่องต้นทาง: กด <b>คัดลอก</b> · เครื่องปลายทาง: วางทับในกล่องแล้วกด <b>กู้คืน</b></div>
+        <div className="field">
+          <label>ข้อมูลสำรอง (JSON)</label>
+          <textarea className="inp mono" style={{width:"100%",height:170,resize:"vertical"}} value={txt} onChange={e=>setTxt(e.target.value)} spellCheck={false}/>
+          {msg && <div style={{fontSize:12,color:"var(--dim)",marginTop:6}}>{msg}</div>}
+        </div>
+        <div className="modal-acts">
+          <button className="btn ghost" onClick={onClose}>ปิด</button>
+          <button className="btn ghost" onClick={restore}>📥 กู้คืน (วางทับเครื่องนี้)</button>
+          <button className="btn" onClick={copy}>📋 คัดลอก</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function SettingsModal({webhook,setWebhook,autoSec,setAutoSec,onClose,onTest}){
+  const [url,setUrl]=useState(webhook);
+  const [sec,setSec]=useState(autoSec);
+  function save(){ setWebhook(url.trim()); setAutoSec(+sec||0); onClose(); setTimeout(onTest,150); }
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()}>
+        <h3>⚙ ตั้งค่า</h3><div className="msub">ข้อมูลทั้งหมดเก็บใน localStorage ของเครื่องคุณเอง</div>
+        <div className="field">
+          <label>n8n Webhook URL (Production)</label>
+          <input className="inp mono" value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://xxxx.app.n8n.cloud/webhook/stocks"/>
+          <div style={{fontSize:12,color:"var(--dim)",marginTop:6}}>มาจาก workflow <code>yahoo-stocks-proxy.json</code> ที่ import เข้า n8n แล้วกด Active</div>
+        </div>
+        <div className="field">
+          <label>รีเฟรชอัตโนมัติทุกกี่วินาที (0 = ปิด)</label>
+          <select className="inp" value={sec} onChange={e=>setSec(+e.target.value)}>
+            <option value={0}>ปิด (กด Sync เอง)</option>
+            <option value={30}>30 วินาที</option>
+            <option value={60}>1 นาที</option>
+            <option value={120}>2 นาที</option>
+            <option value={300}>5 นาที</option>
+          </select>
+        </div>
+        <div className="modal-acts">
+          <button className="btn ghost" onClick={onClose}>ยกเลิก</button>
+          <button className="btn" onClick={save}>บันทึก + ทดสอบ</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
