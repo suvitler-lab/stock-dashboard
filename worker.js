@@ -21,7 +21,7 @@ export default {
       try {
         const r = await fetch(target, {
           headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/calendar, text/plain, */*' },
-          cf: { cacheTtl: 300, cacheEverything: true },
+          cf: { cacheTtl: 60, cacheEverything: true },
         });
         const body = await r.text();
         return new Response(body, {
