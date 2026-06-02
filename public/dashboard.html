@@ -163,6 +163,21 @@ function useLS(key,initial){
   useEffect(()=>{try{localStorage.setItem(LS+key,JSON.stringify(v));}catch(e){}},[key,v]);
   return [v,setV];
 }
+/* ---------- นำเข้าจาก "ลิงก์ซิงค์" (#sync=base64) — เปิดลิงก์จากอีกเครื่องแล้วข้อมูล watchlist/ตั้งค่า มาเลย ---------- */
+(function(){
+  try{
+    const m = String(location.hash||"").match(/[#&]sync=([^&]+)/);
+    if(m){
+      const o = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(m[1])))));
+      if(o && typeof o==="object" && !Array.isArray(o)){
+        if(confirm("นำเข้าข้อมูล (watchlist · Entry/SL/TP · URL · พอร์ต · ตั้งค่า) จากลิงก์ซิงค์?\nจะทับข้อมูลในเครื่องนี้ แล้วรีโหลด")){
+          ["webhook","autoSec","watch","positions","alertCfg"].forEach(k=>{ if(o[k]!=null) localStorage.setItem(LS+k, typeof o[k]==="string"?o[k]:JSON.stringify(o[k])); });
+        }
+      }
+    }
+  }catch(e){}
+  if(/[#&]sync=/.test(location.hash||"")) history.replaceState(null,"",location.pathname+location.search); // กัน import ซ้ำตอน refresh
+})();
 
 /* ---------- indicators (computed client-side from close array) ---------- */
 function ema(arr,p){ if(!arr||arr.length<p) return null; const k=2/(p+1); let e=arr.slice(0,p).reduce((a,b)=>a+b,0)/p; for(let i=p;i<arr.length;i++) e=arr[i]*k+e*(1-k); return e; }
@@ -927,6 +942,13 @@ function BackupModal({onClose}){
     try{ await navigator.clipboard.writeText(txt); setMsg("✅ คัดลอกแล้ว — เปิด Dashboard เวอร์ชันปลายทาง กดปุ่มนี้ วางทับในกล่อง แล้วกด \"กู้คืน\""); }
     catch(e){ setMsg("คัดลอกอัตโนมัติไม่ได้ — คลิกในกล่อง กด Ctrl+A แล้ว Ctrl+C เอง"); }
   }
+  async function syncLink(){
+    let o; try{ o=JSON.parse(txt); }catch(e){ setMsg("❌ ข้อมูลในกล่องไม่ใช่ JSON ที่ถูกต้อง"); return; }
+    const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(o))));
+    const link = location.origin + location.pathname + "#sync=" + encodeURIComponent(b64);
+    try{ await navigator.clipboard.writeText(link); setMsg("✅ คัดลอก \"ลิงก์ซิงค์\" แล้ว — ส่งหาตัวเอง (LINE/โน้ต/อีเมล) แล้วเปิดลิงก์บน iPad/เครื่องอื่น → ข้อมูลจะมาเอง"); }
+    catch(e){ setMsg("คัดลอกไม่ได้ — ลิงก์: " + link); }
+  }
   function restore(){
     let o; try{ o=JSON.parse(txt); }catch(e){ setMsg("❌ ข้อความไม่ใช่ JSON ที่ถูกต้อง"); return; }
     if(!o || typeof o!=="object" || Array.isArray(o)){ setMsg("❌ รูปแบบข้อมูลไม่ถูกต้อง"); return; }
@@ -938,7 +960,7 @@ function BackupModal({onClose}){
     <div className="overlay" onClick={onClose}>
       <div className="modal" onClick={e=>e.stopPropagation()}>
         <h3>💾 สำรอง / กู้คืนข้อมูล</h3>
-        <div className="msub">ย้าย watchlist · Entry/SL/TP · webhook · พอร์ต · การตั้งค่า ข้ามเครื่อง/ข้ามเวอร์ชันที่ host<br/>เครื่องต้นทาง: กด <b>คัดลอก</b> · เครื่องปลายทาง: วางทับในกล่องแล้วกด <b>กู้คืน</b></div>
+        <div className="msub">ย้าย watchlist · Entry/SL/TP · webhook · พอร์ต · การตั้งค่า ข้ามเครื่อง (เช่น PC → iPad)<br/>✨ <b>ง่ายสุด:</b> กด <b>ลิงก์ซิงค์</b> → ส่งหาตัวเอง → เปิดลิงก์บนอีกเครื่อง ข้อมูลมาเอง · หรือใช้ <b>คัดลอก</b>/<b>กู้คืน</b> แบบวางข้อความ</div>
         <div className="field">
           <label>ข้อมูลสำรอง (JSON)</label>
           <textarea className="inp mono" style={{width:"100%",height:170,resize:"vertical"}} value={txt} onChange={e=>setTxt(e.target.value)} spellCheck={false}/>
@@ -946,8 +968,9 @@ function BackupModal({onClose}){
         </div>
         <div className="modal-acts">
           <button className="btn ghost" onClick={onClose}>ปิด</button>
-          <button className="btn ghost" onClick={restore}>📥 กู้คืน (วางทับเครื่องนี้)</button>
-          <button className="btn" onClick={copy}>📋 คัดลอก</button>
+          <button className="btn ghost" onClick={restore}>📥 กู้คืน</button>
+          <button className="btn ghost" onClick={copy}>📋 คัดลอก</button>
+          <button className="btn" onClick={syncLink}>📎 ลิงก์ซิงค์</button>
         </div>
       </div>
     </div>
