@@ -34,6 +34,14 @@ export default {
     }
 
     // everything else → the static assets (index.html lobby, dashboard.html, …)
-    return env.ASSETS.fetch(request);
+    const res = await env.ASSETS.fetch(request);
+    // บังคับให้ HTML โหลดสดทุกครั้ง (revalidate) — กัน iPad/Safari ค้างเวอร์ชันเก่าหลัง deploy
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('text/html')) {
+      const h = new Headers(res.headers);
+      h.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+      return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
+    }
+    return res;
   },
 };
