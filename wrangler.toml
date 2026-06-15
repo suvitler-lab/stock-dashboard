@@ -7,3 +7,19 @@ compatibility_date = "2024-11-01"
 [assets]
 directory = "./public"
 binding = "ASSETS"
+
+# Server-stored watchlist (cross-device) — เก็บที่นี่เพื่อให้คอม/iPad/มือถือเห็นข้อมูลเดียวกันโดยไม่ต้องตั้งรหัสซิงค์
+[[kv_namespaces]]
+binding = "WATCHLIST"
+id = "3e57c54fcbda4858a4a861a378a7ce0d"
+
+# D1 - Decision Journal (Phase 0.5) เก็บ snapshot ราคา+อินดิเคเตอร์รายวัน ไว้วัดผลย้อนหลัง
+[[d1_databases]]
+binding = "JOURNAL"
+database_name = "stock-journal"
+database_id = "507e1012-d2f9-43d7-882c-24b2515268dc"
+
+# Cron - (1) คำนวณ signal เขียนลง KV ทุก 15 นาที (single source)
+#        (2) snapshot ลง D1 ทุกวัน 22:00 UTC = 05:00 น.ไทย (หลังตลาด US ปิด)
+[triggers]
+crons = ["*/15 * * * *", "0 22 * * 1-5"]
