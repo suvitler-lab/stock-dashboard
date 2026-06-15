@@ -1,8 +1,10 @@
 # สถาปัตยกรรมระบบตัดสินใจลงทุน (Investment Decision System)
 
-> **สถานะ (มิ.ย. 2026): Phase 0–4 + 3 ฟีเจอร์เสริม เสร็จและ deploy แล้ว**
+> **สถานะ (มิ.ย. 2026): Phase 0–4 + critique นักลงทุนระดับโลก 5 หมวด เสร็จและ deploy แล้ว**
 > Endpoints: `/decide` `/thesis` `/performance` `/positions` `/api/surprise` · catalyst/heat/position-tracking ครบ · cache fullData ลด /decide เหลือ ~วินาที
-> รายละเอียด implementation อยู่ใน memory `d1-journal-phase05.md`
+> **ยกระดับ 5 หมวด (signal/วัดผล/ความเสี่ยง/พื้นฐาน/regime) → ดู [REVIEW.md](REVIEW.md)** (critique→สถานะ→โค้ด→วิธี verify)
+> conviction engine: 5 มิติ regime-weighted · ป้าย=conviction (เลิก signalOf) · RS 3 เดือน · sizing หัก corr/kill-switch/event · regime + credit/breadth · fundamentals flag
+> รายละเอียด implementation อยู่ใน memory `d1-journal-phase05.md` · build/precompile: `dashboard-build-precompile.md`
 
 
 > เป้าหมาย: ยกระดับจาก "data → prompt → vibes" เป็นระบบที่ **วัดผลได้ + มีวินัย + จำได้**
