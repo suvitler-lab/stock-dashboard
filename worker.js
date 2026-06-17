@@ -19,7 +19,7 @@ function qtyFmt(x) {
 // format ทศนิยม (ใช้ใน surprise/telegram) — d ตำแหน่ง (default 2)
 function f2(x, d = 2) { return (x == null || isNaN(x)) ? '—' : (+x).toFixed(d); }
 
-async function yahooDaily(symbol, range, interval) {
+async function yahooDailyRaw(symbol, range, interval) {
   for (const h of YHOSTS) {
     try {
       const res = await fetch(`${h}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}`, {
@@ -63,11 +63,62 @@ async function yahooDaily(symbol, range, interval) {
         timestamps: ts,
         week52High: m.fiftyTwoWeekHigh != null ? m.fiftyTwoWeekHigh : hi52,
         week52Low: m.fiftyTwoWeekLow != null ? m.fiftyTwoWeekLow : lo52,
-        ok: true,
+        ok: true, via: 'yahoo',
       };
     } catch (e) {}
   }
   return { symbol, ok: false, error: 'fetch_failed' };
+}
+
+// ===== Twelve Data fallback (กัน Yahoo SPOF) — คนละผู้ให้บริการ (อิสระจาก Yahoo) · free 800 req/วัน, 8/นาที =====
+// gate ด้วย secret TWELVEDATA_API_KEY · ไม่ตั้ง = ไม่มี fallback (graceful: ระบบยังพึ่ง Yahoo, heartbeat เตือนถ้า Yahoo ดับ)
+// ⚠️ rate limit 8/นาที: Yahoo "ดับทั้งหมดพร้อมกัน" → 22 symbol ยิงพร้อมกันบางตัวอาจโดน 429 (ได้ข้อมูลบางส่วน) · กรณีปกติ Yahoo flaky บางตัว = ทำงานเต็มที่
+// ดัชนี map เป็น symbol ดัชนีจริง (^GSPC→SPX) ไม่ใช้ ETF proxy — กัน scale เพี้ยนทำ benchmark ใน journal พัง · free tier ไม่ครอบคลุมดัชนี = fail graceful (spx null)
+function toTwelveSymbol(sym) {
+  const s = String(sym).toUpperCase();
+  const idx = { '^GSPC': 'SPX', '^IXIC': 'IXIC', '^DJI': 'DJI', '^VIX': 'VIX', '^NDX': 'NDX' };
+  return idx[s] || s;   // หุ้น/ETF ใช้ ticker ตรงๆ
+}
+async function twelveDailyFallback(symbol, range) {
+  const key = _env && _env.TWELVEDATA_API_KEY;
+  if (!key) return { symbol, ok: false, error: 'no_fallback_key' };
+  const outputsize = range === '5d' ? 12 : range === '1y' ? 300 : 800;
+  const ts = toTwelveSymbol(symbol);
+  try {
+    const res = await fetch(`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(ts)}&interval=1day&outputsize=${outputsize}&apikey=${key}`, { cf: { cacheTtl: 60, cacheEverything: true } });
+    if (!res.ok) return { symbol, ok: false, error: 'td_http_' + res.status };
+    const j = await res.json();
+    if (!j || j.status === 'error' || !Array.isArray(j.values) || !j.values.length) {
+      return { symbol, ok: false, error: 'td_' + String((j && j.message) || 'no_data').slice(0, 50) };
+    }
+    const vals = j.values.slice().reverse();   // Twelve Data = ใหม่→เก่า · reverse ให้ เก่า→ใหม่ ตรงกับ yahoo
+    const closes = [], ohlc = [], volumes = [], timestamps = [];
+    let hi52 = null, lo52 = null;
+    for (const b of vals) {
+      const c = +b.close; if (!isFinite(c)) continue;
+      const o = +b.open, h = +b.high, l = +b.low, v = b.volume != null ? +b.volume : NaN;
+      const hh = isFinite(h) ? h : c, ll = isFinite(l) ? l : c;
+      const t = Math.floor(Date.parse(b.datetime + 'T00:00:00Z') / 1000);
+      closes.push(c); volumes.push(isFinite(v) ? v : null); timestamps.push(t);
+      ohlc.push({ t, o: isFinite(o) ? o : c, h: hh, l: ll, c });
+      if (hi52 == null || hh > hi52) hi52 = hh;
+      if (lo52 == null || ll < lo52) lo52 = ll;
+    }
+    if (!closes.length) return { symbol, ok: false, error: 'td_empty' };
+    return {
+      symbol, name: symbol, price: closes[closes.length - 1],
+      prevClose: closes.length >= 2 ? closes[closes.length - 2] : null,
+      currency: 'USD', exchange: 'TwelveData', closes, ohlc, volumes, timestamps,
+      week52High: hi52, week52Low: lo52, ok: true, via: 'twelvedata',
+    };
+  } catch (e) { return { symbol, ok: false, error: 'td_' + (e && e.message) }; }
+}
+// yahooDaily — หน้าด่าน: Yahoo เป็นหลัก, ล้ม → Twelve Data fallback · ทุก caller ได้ resilience อัตโนมัติ (กัน Yahoo ดับทั้งระบบ)
+async function yahooDaily(symbol, range, interval) {
+  const y = await yahooDailyRaw(symbol, range, interval).catch(() => ({ symbol, ok: false }));
+  if (y && y.ok) return y;
+  if (interval && interval !== '1d') return y;   // intraday/อื่น — fallback (EOD) ช่วยไม่ได้
+  return twelveDailyFallback(symbol, range);
 }
 
 async function yahooIntraday(symbol) {
@@ -250,6 +301,7 @@ async function spxChangePct() {
 // flow: GET fc.yahoo.com → Set-Cookie · GET /v1/test/getcrumb (พร้อม cookie) → crumb
 // cache ระดับ isolate (in-memory) · refresh ได้เมื่อหมดอายุ/โดน 401
 let _yahooAuth = null; // { cookie, crumb }
+let _env = null; // stash env ที่ entry (scheduled/fetch) → ให้ fallback (twelveDailyFallback) อ่าน secret โดยไม่ต้อง thread env ทุก call site
 async function getYahooAuth(force = false) {
   if (_yahooAuth && !force) return _yahooAuth;
   try {
@@ -543,7 +595,14 @@ async function computeWatchlistData(env, opts = {}) {
     }
   }
   pairCorr30.sort((a, b) => Math.abs(b.corr30) - Math.abs(a.corr30));
-  return { updated: new Date().toISOString(), count: stocks.filter(s => s.ok).length, source: 'Yahoo Finance via Cloudflare Worker', spxChangePct: rnd(spxChg, 2), spxPrice: rnd(spxFull && spxFull.ok ? spxFull.price : null), note: 'signal = rule-based score (RSI/EMA/MACD/Bollinger/ROC/CMF/RS vs S&P500), ไม่ใช่คำแนะนำการลงทุน', stocks, pairCorr30 };
+  // spxLastBarTs = unix(s) ของแท่ง SPX รายวันล่าสุด → ใช้เช็ค "ตลาด US เทรดวันนี้จริงไหม" (กัน snapshot วันหยุด/ข้อมูลค้าง)
+  const spxLastBarTs = (spxFull && spxFull.ok && spxFull.timestamps && spxFull.timestamps.length) ? spxFull.timestamps[spxFull.timestamps.length - 1] : null;
+  // dataVia = แหล่งข้อมูลที่ใช้จริง — มี non-yahoo โผล่ = Yahoo ล้ม กำลังวิ่ง fallback (สังเกตได้ผ่าน heartbeat/Telegram)
+  const viaSet = new Set();
+  if (spxFull && spxFull.via) viaSet.add(spxFull.via);
+  rows.forEach(q => { if (q && q.via) viaSet.add(q.via); });
+  const dataVia = (viaSet.size === 1 && viaSet.has('yahoo')) ? 'yahoo' : (viaSet.size ? [...viaSet].sort().join('+') : 'none');
+  return { updated: new Date().toISOString(), count: stocks.filter(s => s.ok).length, source: 'Yahoo Finance via Cloudflare Worker', dataVia, spxChangePct: rnd(spxChg, 2), spxPrice: rnd(spxFull && spxFull.ok ? spxFull.price : null), spxLastBarTs, note: 'signal = rule-based score (RSI/EMA/MACD/Bollinger/ROC/CMF/RS vs S&P500), ไม่ใช่คำแนะนำการลงทุน', stocks, pairCorr30 };
 }
 
 // MARKET bar — ดัชนีตลาดรวม (S&P500 / Nasdaq / Dow + VIX) สำหรับหัวรายงาน
@@ -704,6 +763,24 @@ async function computePortfolio(env) {
 async function handlePortfolioJson(env) {
   const d = await computePortfolio(env);
   return new Response(JSON.stringify(d, null, 2), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate' } });
+}
+
+// /api/catalysts — รายการ catalyst ใกล้: งบรายตัว (จาก KV earnings ที่ cron warm ทุกตัว) + FOMC/econ events
+// ให้ Apps Script ดึงไปเขียน Sheet → ปฏิทิน catalyst อัปเดตเองไม่ต้องแก้มือ
+async function handleCatalysts(env, horizon = 180) {
+  let watch = [];
+  try { const raw = await env.WATCHLIST.get('main'); if (raw) watch = JSON.parse(raw); } catch (e) {}
+  const events = [];
+  await Promise.all((watch || []).filter(w => w && w.symbol).map(async w => {
+    const sym = String(w.symbol).toUpperCase();
+    const e = await fetchEarningsReadOnly(env, sym).catch(() => null);
+    if (e && e.date && e.daysUntil != null && e.daysUntil >= 0 && e.daysUntil <= horizon)
+      events.push({ type: 'earnings', symbol: sym, name: w.name || sym, date: e.date, daysUntil: e.daysUntil, impact: 'med' });
+  }));
+  econEventsSoon(horizon).forEach(ev => events.push({ type: 'fomc', symbol: '', name: ev.name, date: ev.date, daysUntil: ev.daysUntil, impact: ev.impact }));
+  events.sort((a, b) => a.daysUntil - b.daysUntil);
+  return new Response(JSON.stringify({ updated: new Date().toISOString(), horizonDays: horizon, count: events.length, events }, null, 2),
+    { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate' } });
 }
 
 // /portfolio — หน้า HTML สรุปพอร์ต (ดู/ก๊อปได้ในเบราว์เซอร์ + ให้ AI browse)
@@ -1244,16 +1321,50 @@ ${esc(lines.join('\n'))}${esc(portLine)}</div>
 }
 
 // /csv — ออกทุกค่าอินดิเคเตอร์เป็น CSV ให้ Google Sheet ดึงด้วย =IMPORTDATA("...") + Gemini อ่านง่าย
+// /csv — ตารางครบชุดเท่าระบบ thesis จริง (1 แถว/หุ้น) สำหรับ Google Sheet → Gemini Gem
+// merge: indicator เต็ม (computeWatchlistData) + conviction/stance/reason/earnings (computeDecision) + จำนวนถือ (computePortfolio)
 async function handleCsv(env) {
-  const d = await computeWatchlistData(env);
-  const cols = ['symbol','name','signal','price','regularClose','phase','changePct',
-    'rsi','rsiWeekly','macdHist','roc10','cmf','rsVsSpx',
-    'ema15','ema30','ema50','ema100','ema200','sma200',
-    'bollUpper','bollLower','volume','volAvg20','volRatio',
-    'week52High','week52Low','pctFrom52High','pctFrom52Low','entry','sl','tp'];
+  const [d, dec, port] = await Promise.all([
+    computeWatchlistData(env, { cached: true }),
+    computeDecision(env).catch(() => null),
+    computePortfolio(env).catch(() => null),
+  ]);
+  // map ข้อมูลจาก decision ต่อ symbol (conviction/stance/reason/signal/earnings)
+  const decMap = {};
+  if (dec) [...(dec.candidates || []), ...(dec.core || [])].forEach(c => { if (c && c.symbol) decMap[String(c.symbol).toUpperCase()] = c; });
+  // map จำนวนหุ้นที่ถืออยู่จริง
+  const heldMap = {};
+  if (port && Array.isArray(port.positions)) port.positions.forEach(p => { if (p && p.symbol) heldMap[String(p.symbol).toUpperCase()] = p; });
+  const rg = dec && dec.regime ? dec.regime : null;
+
+  const cols = [
+    'symbol','name','stance','conviction','signal','reason',
+    'held_qty','held_avgCost','held_plPct',
+    'price','regularClose','phase','changePct',
+    'rsi','rsiWeekly','macdHist','roc10',
+    'cmf','rsVsSpx','rs3m','volRatio','volume','volAvg20',
+    'ema15','ema30','ema50','ema100','ema200','sma200','bollUpper','bollLower',
+    'atr14','slAtr2x','beta1y','corr30','corr60',
+    'week52High','week52Low','pctFrom52High','pctFrom52Low',
+    'entry','sl','tp','impliedMovePct','earningsInDays','earningsDate',
+    'regime','buyThresh',
+  ];
   const esc = v => { if (v == null) return ''; const s = String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const head = cols.join(',');
-  const rows = d.stocks.filter(s => s.ok).map(s => cols.map(c => esc(s[c])).join(','));
+  const rows = d.stocks.filter(s => s.ok).map(s => {
+    const dc = decMap[String(s.symbol).toUpperCase()] || {};
+    const hd = heldMap[String(s.symbol).toUpperCase()] || {};
+    const earn = dc.earnings || null;
+    const row = {
+      ...s,
+      stance: dc.stance, conviction: dc.conviction, signal: dc.signal != null ? dc.signal : s.signal, reason: dc.reason,
+      held_qty: hd.qty, held_avgCost: hd.avgCost, held_plPct: hd.plPct,
+      impliedMovePct: s.impliedMove && s.impliedMove.pct,
+      earningsInDays: earn && earn.daysUntil, earningsDate: earn && earn.date,
+      regime: rg ? rg.regime : '', buyThresh: dec ? dec.buyThresh : '',
+    };
+    return cols.map(c => esc(row[c])).join(',');
+  });
   const csv = [head, ...rows].join('\n');
   return new Response(csv, { headers: { ...CORS, 'Content-Type': 'text/csv; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate' } });
 }
@@ -1275,11 +1386,19 @@ async function writeSignalsToKV(env) {
 
 // Phase 0.5 — snapshot รายวันลง D1 (เก็บราคา raw + indicator กัน lookahead bias)
 // idempotent: UNIQUE(ts_date, symbol) + INSERT OR IGNORE → cron รันซ้ำไม่สร้างแถวซ้ำ
-async function logDailySnapshot(env) {
+// holiday guard: ข้ามถ้าตลาด US ไม่ได้เทรดวันนี้ (วันหยุด) หรือ Yahoo คืนข้อมูลค้าง — กันแถวราคาซ้ำปน journal
+//   ทำให้ computePerformance นับ horizon 5/10/20 "วันทำการ" เพี้ยน + เพิ่ม observation ไม่อิสระ (lookahead-by-holiday)
+//   วิธี: เทียบวันที่ของแท่ง SPX ล่าสุด (เวลา ET) กับวันนี้ (ET) — ไม่ตรง = ตลาดไม่ได้เทรดวันนี้ → skip · force=true ข้ามการเช็ค (manual)
+async function logDailySnapshot(env, force = false) {
   if (!env.JOURNAL) return { ok: false, error: 'no D1 binding' };
   const d = await computeWatchlistData(env);
   const ok = d.stocks.filter(s => s && s.ok && s.symbol);
   if (!ok.length) return { ok: false, error: 'no stocks' };
+  if (!force && d.spxLastBarTs) {
+    const etToday = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const etLastBar = new Date(d.spxLastBarTs * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    if (etLastBar !== etToday) return { ok: true, skipped: true, reason: 'market-closed-or-stale', etToday, etLastBar };
+  }
   const tsDate = new Date(d.updated).toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' }); // YYYY-MM-DD เวลาไทย
   const spxChg = d.spxChangePct != null ? d.spxChangePct : null;
   const spxPrice = d.spxPrice != null ? d.spxPrice : null;
@@ -1300,7 +1419,7 @@ async function logDailySnapshot(env) {
     );
   });
   await env.JOURNAL.batch(batch);
-  return { ok: true, date: tsDate, rows: batch.length };
+  return { ok: true, date: tsDate, rows: batch.length, via: d.dataVia };
 }
 
 // Phase 1 — วัดผลย้อนหลัง: เทียบ snapshot กับ snapshot ในอนาคต H วันทำการ (5/10/20)
@@ -1618,7 +1737,7 @@ async function computeDecision(env, opts = {}) {
     getRegime(env),
     opts.lite ? Promise.resolve(null) : computePortfolio(env).catch(() => null),
   ]);
-  const holdings = (port && port.holdings) ? port.holdings.filter(h => h.ok) : [];
+  const holdings = (port && port.positions) ? port.positions.filter(h => h.ok) : [];
   // kill-switch: แพ้ติดกัน ≥3 ไม้ → ยกเกณฑ์ซื้อ +8 และลดขนาดไม้ครึ่ง (คุมอารมณ์รีบแก้มือ)
   const lossStreak = await recentLossStreak(env);
   const killSwitch = lossStreak >= 3;
@@ -1704,7 +1823,7 @@ async function computeDecision(env, opts = {}) {
 // POSITION TRACKING — เชื่อม position จริง (KV) กับ invalidation ล่าสุดจาก thesis (D1) → เตือนใกล้/หลุด
 async function computePositionWatch(env) {
   const port = await computePortfolio(env).catch(() => null);
-  const holdings = (port && port.holdings) ? port.holdings.filter(h => h.ok) : [];
+  const holdings = (port && port.positions) ? port.positions.filter(h => h.ok) : [];
   if (!holdings.length) return { ok: true, positions: [], note: 'ไม่มี position ที่ถืออยู่' };
   const invMap = {};
   if (env.JOURNAL) {
@@ -1978,7 +2097,8 @@ async function runSurpriseAlert(env) {
 async function callGemini(env, prompt, schema, _try = 0, _mi = 0) {
   const key = env.GEMINI_API_KEY;
   if (!key) return { ok: false, error: 'no GEMINI_API_KEY' };
-  const models = env.GEMINI_MODEL ? [env.GEMINI_MODEL] : ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash-lite', 'gemini-flash-latest'];
+  // pro ก่อน (ฉลาดกว่า — ต้องเปิด billing ใน AI Studio) → ถ้า 429 (ไม่มี billing/quota หมด) fallback flash อัตโนมัติ
+  const models = env.GEMINI_MODEL ? [env.GEMINI_MODEL] : ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-flash-latest'];
   const model = models[_mi] || models[models.length - 1];
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
@@ -2123,34 +2243,430 @@ async function generateThesis(env, opts = {}) {
   return result;
 }
 
+// HEARTBEAT — dead-man's switch สำหรับ daily cron (ข้อมูล journal ย้อนเก็บไม่ได้ → cron ล้มเงียบ = หายนะ)
+// ตั้ง secret HEARTBEAT_URL (เช่น https://hc-ping.com/<uuid> จาก healthchecks.io ฟรี):
+//   สำเร็จ/วันหยุด → ping URL · ล้ม → ping URL/fail · ถ้า cron ไม่รันเลย บริการจะเตือนเอง (ครอบ Yahoo บล็อก/worker ตาย)
+// ไม่ตั้ง HEARTBEAT_URL ก็ข้ามเงียบ ๆ — failure ยังเด้ง Telegram อยู่ดี (ดู runDailyCron)
+async function pingHeartbeat(env, ok, detail) {
+  if (!env.HEARTBEAT_URL) return;
+  const url = ok ? env.HEARTBEAT_URL : env.HEARTBEAT_URL.replace(/\/$/, '') + '/fail';
+  try { await fetch(url, { method: 'POST', body: String(detail || '').slice(0, 500) }); } catch (e) {}
+}
+
+// daily cron รวมศูนย์ — warm cache → snapshot (มี holiday guard) → surprise alert → heartbeat
+// • snapshot skip (วันหยุด/ข้อมูลค้าง) = cron ทำงานถูกต้อง → ping success (กัน healthchecks false-alarm วันหยุด)
+// • snapshot ล้ม = ข้อมูลที่ย้อนเก็บไม่ได้หาย → ping /fail + เด้ง Telegram (failure คือ surprise จริง ฝ่าหลัก surprise-only ได้)
+// • surprise alert ล้ม (LLM/Telegram hiccup) ไม่ทำให้ทั้ง cron fail — snapshot คือของสำคัญ เก็บได้ก็พอ
+async function runDailyCron(env) {
+  let summary = '';
+  try {
+    const raw = await env.WATCHLIST.get('main');
+    const syms = (JSON.parse(raw || '[]') || []).map(w => w && w.symbol).filter(Boolean);
+    await warmEarnings(env, syms);
+    await warmFundamentals(env, syms);
+    const snap = await logDailySnapshot(env);
+    if (snap.skipped) {
+      await pingHeartbeat(env, true, `skip: ${snap.reason} (lastBar ${snap.etLastBar} ≠ today ${snap.etToday})`);
+      return { ok: true, skipped: true, reason: snap.reason };
+    }
+    if (!snap.ok) throw new Error('snapshot: ' + (snap.error || 'unknown'));
+    summary = `snapshot ${snap.rows} rows @ ${snap.date} (via ${snap.via})`;
+    // Yahoo ล้ม → วิ่ง Stooq fallback · ระบบยังรอด แต่ควรรู้ว่า primary source มีปัญหา (heartbeat ยังเขียว)
+    if (snap.via && snap.via !== 'yahoo') {
+      await sendTelegram(env, `ℹ️ <b>Data fallback ทำงาน</b>\nYahoo ดึงไม่ได้ — snapshot วันนี้ใช้ <b>Stooq</b> (${snap.via}) แทน · ระบบยังทำงานปกติ แต่เช็ค Yahoo ด้วย`).catch(() => {});
+    }
+    const alert = await runSurpriseAlert(env).catch(e => ({ ok: false, error: e && e.message }));
+    await pingHeartbeat(env, true, summary + (alert && alert.sent ? ' · alert sent' : (alert && alert.error ? ' · alert ERR: ' + alert.error : '')));
+    return { ok: true, ...snap, alert };
+  } catch (e) {
+    const msg = (e && e.message) || String(e);
+    console.error('daily cron:', msg);
+    await pingHeartbeat(env, false, msg);
+    await sendTelegram(env, `⚠️ <b>Daily cron ล้มเหลว</b>\n${summary ? summary + '\n' : ''}<code>${msg.slice(0, 300)}</code>\nsnapshot วันนี้อาจหาย — ข้อมูล journal ย้อนเก็บไม่ได้`).catch(() => {});
+    return { ok: false, error: msg };
+  }
+}
+
+// CSV ของ signal_history — ใช้ทั้ง /api/journal-export และ backup รายสัปดาห์ (source เดียว กัน duplication ตาม [[signal-three-places]])
+async function journalCsv(env, days = 3650) {
+  const since = new Date(Date.now() - days * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
+  const { results } = await env.JOURNAL.prepare(
+    `SELECT * FROM signal_history WHERE ts_date >= ? ORDER BY ts_date, symbol`
+  ).bind(since).all();
+  const rows = results || [];
+  const cols = ['ts_date','symbol','signal','price','regular_close','rsi','rsi_weekly','macd_hist','cmf','rs_vs_spx','atr14','beta1y','ema50','ema200','sma200','change_pct','spx_change','spx_price','conviction','regime'];
+  const esc = v => v == null ? '' : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
+  const lines = [cols.join(',')].concat(rows.map(r => cols.map(c => esc(r[c])).join(',')));
+  return { csv: lines.join('\n'), count: rows.length };
+}
+
+// ส่งไฟล์เข้า Telegram (sendDocument, multipart) — ใช้ backup journal แบบ off-Cloudflare
+async function sendTelegramDocument(env, filename, content, caption) {
+  const token = env.TELEGRAM_BOT_TOKEN, chat = env.TELEGRAM_CHAT_ID;
+  if (!token || !chat) return { ok: false, error: 'no telegram secret' };
+  try {
+    const fd = new FormData();
+    fd.append('chat_id', String(chat));
+    if (caption) { fd.append('caption', caption); fd.append('parse_mode', 'HTML'); }
+    fd.append('document', new Blob([content], { type: 'text/csv' }), filename);
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, { method: 'POST', body: fd });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, status: res.status, error: j.description || 'telegram error' };
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e && e.message }; }
+}
+
+// BACKUP รายสัปดาห์ — ดัมป์ journal ทั้งหมดเป็น CSV ส่งเข้า Telegram (เก็บนอก Cloudflare กัน D1 ลบผิด/free-tier มีปัญหา)
+// ข้อมูล signal_history ย้อนเก็บไม่ได้ → manual backup = ไม่เกิดจริง · cron เสาร์ทำให้อัตโนมัติ · ล้ม = เด้ง Telegram เตือน
+async function runWeeklyBackup(env) {
+  if (!env.JOURNAL) return { ok: false, error: 'no D1' };
+  try {
+    const { csv, count } = await journalCsv(env);
+    if (!count) return { ok: true, count: 0, note: 'journal ว่าง ยังไม่ backup' };
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
+    const r = await sendTelegramDocument(env, `journal-${today}.csv`, csv, `🗄️ <b>สำรอง Decision Journal</b>\n${count} แถว · ${today}`);
+    if (!r.ok) {
+      await sendTelegram(env, `⚠️ <b>Backup journal ล้มเหลว</b>\n<code>${String(r.error || '').slice(0, 200)}</code>`).catch(() => {});
+      return { ok: false, error: r.error };
+    }
+    return { ok: true, count };
+  } catch (e) {
+    const msg = (e && e.message) || String(e);
+    console.error('weekly backup:', msg);
+    await sendTelegram(env, `⚠️ <b>Backup journal ล้มเหลว</b>\n<code>${msg.slice(0, 200)}</code>`).catch(() => {});
+    return { ok: false, error: msg };
+  }
+}
+
+// AUTH gate — endpoint ที่เขียน state / debug / เปิดข้อมูลดิบ · กัน public .workers.dev URL โดน scan/abuse (เผา quota, เขียน D1, info leak)
+// ตั้ง secret ADMIN_TOKEN → ส่งผ่าน header `X-Admin-Token` หรือ `?token=` · ไม่ตั้ง = ไม่ gate (backward-compatible — ตั้งแล้วค่อย active)
+function requireAdmin(request, env, url) {
+  if (!env.ADMIN_TOKEN) return null;
+  const tok = request.headers.get('X-Admin-Token') || url.searchParams.get('token') || '';
+  if (tok !== env.ADMIN_TOKEN) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { ...CORS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+  return null;
+}
+
+// ============ Phase 5 — CIO LAYER (deterministic · ไม่ใช้ Gemini) ============
+// M36 Portfolio Defense · M37 Capital Allocation · M38 Portfolio Scenario
+// หลักการ: เลขมาจากสูตร/ข้อมูลจริง (regime, conviction, beta) ไม่ให้ LLM เดา → เลี่ยง false precision
+// ตัวเลขที่อิงค่าประมาณ (beta, marketMove สมมติ) ต้องติด assumption ใน output เสมอ
+
+// ---------- M36 — PORTFOLIO DEFENSE / KILL SWITCH ----------
+// นับ trigger จาก market-regime indicators (ที่ getRegime คำนวณไว้แล้ว) → ระดับ 0-3
+// แยกจาก kill-switch เดิมใน computeDecision (อันนั้นนับ "แพ้ติดกัน" จาก trade_log — คนละเรื่อง)
+const DEFENSE_LEVELS = {
+  0: { tag: 'ปกติ',            trimTacticalPct: 0,   action: 'ไม่มี trigger ตลาดเปิด — ลงทุนตามแผนปกติได้' },
+  1: { tag: 'ระวัง (L1)',       trimTacticalPct: 20,  action: 'หยุด DCA/เปิดไม้ใหม่ · ลด tactical 20% · ขึ้น cash buffer · ตั้ง SL ให้แน่น' },
+  2: { tag: 'ตั้งรับ (L2)',      trimTacticalPct: 50,  action: 'ลด tactical 50% (trim high-beta ก่อน) · เก็บ core/defensive · งดเปิดไม้ใหม่' },
+  3: { tag: 'ป้องกันทุน (L3)',   trimTacticalPct: 100, action: 'ขาย tactical ออกทั้งหมด · ถือเงินสดให้มาก (~40%+) · เหลือเฉพาะ anchor (core) + defensive · งดเก็งกำไร' },
+};
+// PURE: ประเมินระดับ defense จาก regime object (จาก getRegime/computeRegimeRaw) — testable ไม่ต้อง network
+function defenseAssess(regime) {
+  const r = regime || {};
+  const triggers = [];
+  if (r.ndxAboveEma200Pct != null && r.ndxAboveEma200Pct < 0) triggers.push(`Nasdaq-100 ต่ำกว่า EMA200 (${r.ndxAboveEma200Pct}%)`);
+  if (r.aboveEma200Pct != null && r.aboveEma200Pct < 0) triggers.push(`S&P500 ต่ำกว่า EMA200 (${r.aboveEma200Pct}%)`);
+  const vix = r.vix;
+  const vixPanic = vix != null && vix > 35;
+  if (vixPanic) triggers.push(`VIX ${vix} > 35 (panic)`);
+  else if (vix != null && vix > 25) triggers.push(`VIX ${vix} > 25 (ตลาดเริ่มกลัว)`);
+  if (r.creditOk === false) triggers.push('เครดิต HYG อ่อน (ต่ำกว่า EMA50) — risk-off นำตลาด');
+  if (r.breadthOk === false) triggers.push('breadth RSP อ่อน (ต่ำกว่า EMA50) — rally แคบ');
+  let level = Math.min(3, triggers.length);
+  if (vixPanic) level = 3;                 // VIX>35 บังคับ L3 แม้ trigger อื่นยังไม่ครบ
+  return { level, triggers, ...DEFENSE_LEVELS[level] };
+}
+// "ห่างจาก trigger แค่ไหน" (เมื่อยังไม่เปิด) — บอกผู้ใช้ว่าใกล้โดนข้อไหน
+function defenseHeadroom(regime) {
+  const r = regime || {}, near = [];
+  if (r.aboveEma200Pct != null && r.aboveEma200Pct >= 0) near.push(`S&P500 เหนือ EMA200 +${r.aboveEma200Pct}% (หลุด 0% = trigger)`);
+  if (r.ndxAboveEma200Pct != null && r.ndxAboveEma200Pct >= 0) near.push(`Nasdaq-100 เหนือ EMA200 +${r.ndxAboveEma200Pct}%`);
+  if (r.vix != null && r.vix <= 25) near.push(`VIX ${r.vix} (trigger ที่ 25 / panic 35)`);
+  return near;
+}
+async function computeDefense(env) {
+  let watch = [];
+  try { const raw = await env.WATCHLIST.get('main'); if (raw) watch = JSON.parse(raw); } catch (e) {}
+  const watchMap = {}; watch.forEach(w => { if (w && w.symbol) watchMap[String(w.symbol).toUpperCase()] = w; });
+  const [regime, port, wd] = await Promise.all([
+    getRegime(env),
+    computePortfolio(env).catch(() => null),
+    computeWatchlistData(env, { cached: true }).catch(() => null),
+  ]);
+  const betaMap = {};
+  if (wd && wd.stocks) wd.stocks.forEach(s => { if (s && s.symbol && s.beta1y != null) betaMap[String(s.symbol).toUpperCase()] = s.beta1y; });
+  const assess = defenseAssess(regime);
+  const rnd = (x, d = 2) => (x == null || isNaN(x)) ? null : +Number(x).toFixed(d);
+  const holdings = (port && port.positions) ? port.positions.filter(h => h.ok) : [];
+  const totalVal = holdings.reduce((s, h) => s + (h.value || 0), 0);
+  // weighted beta (เฉพาะที่รู้ beta) + coverage บอกว่าครอบคลุมกี่ %
+  let wBetaNum = 0, betaCov = 0;
+  holdings.forEach(h => { const b = betaMap[h.symbol]; if (b != null && totalVal > 0) { const w = h.value / totalVal; wBetaNum += w * b; betaCov += w; } });
+  const weightedBeta = betaCov > 0 ? wBetaNum / betaCov : null;   // normalize ด้วย coverage กัน bias ตอนข้อมูลขาด
+  // trim plan — tactical (non-core) เรียง beta สูง→ต่ำ trim ก่อน · core เก็บไว้
+  const plan = holdings.map(h => {
+    const core = isCore(h.symbol, watchMap[h.symbol]);
+    const beta = betaMap[h.symbol] != null ? betaMap[h.symbol] : null;
+    const trimPct = core ? 0 : assess.trimTacticalPct;
+    const sharesToSell = trimPct > 0 ? +(h.qty * trimPct / 100).toFixed(4) : 0;
+    const valueFreed = trimPct > 0 ? +(sharesToSell * (h.price || 0)).toFixed(2) : 0;
+    return { symbol: h.symbol, name: h.name, core, beta: rnd(beta), weight: rnd(h.weight), price: rnd(h.price),
+      qty: h.qty, trimPct, sharesToSell, valueFreed, keep: core || trimPct === 0 };
+  }).sort((a, b) => (b.core === a.core) ? ((b.beta || 0) - (a.beta || 0)) : (a.core ? 1 : -1));  // tactical ก่อน, beta สูงก่อน
+  const totalFreed = +plan.reduce((s, p) => s + (p.valueFreed || 0), 0).toFixed(2);
+  return {
+    updated: new Date().toISOString(),
+    regime: { regime: regime.regime, vix: regime.vix, spxAboveEma200Pct: regime.aboveEma200Pct, ndxAboveEma200Pct: regime.ndxAboveEma200Pct, creditOk: regime.creditOk, breadthOk: regime.breadthOk },
+    level: assess.level, levelTag: assess.tag, triggers: assess.triggers, action: assess.action,
+    headroom: assess.level === 0 ? defenseHeadroom(regime) : [],
+    portfolioValue: rnd(totalVal), weightedBeta: rnd(weightedBeta), betaCoveragePct: rnd(betaCov * 100),
+    trimPlan: plan, totalFreed,
+    assumptions: [
+      'trigger อิง market-regime indicators ที่คำนวณจากราคาจริง (SPX/NDX vs EMA200, VIX, HYG, RSP)',
+      'weighted beta เป็นค่าประมาณ (beta 1y, ครอบคลุม ' + (rnd(betaCov * 100) ?? 0) + '% ของพอร์ต) — ใช้ชี้ขนาดความเสี่ยงสัมพัทธ์ ไม่ใช่พยากรณ์เป๊ะ',
+      'cash level จริงไม่ได้ track ในระบบ → L3 บอกเป้าหมาย cash เชิงทิศทาง ไม่ใช่คำนวณจากเงินสดจริง',
+    ],
+    note: 'M36 Portfolio Defense (deterministic) — ไม่ใช้ LLM · ไม่ใช่คำแนะนำการลงทุน',
+  };
+}
+
+// ---------- M37 — CAPITAL ALLOCATION RANKING ----------
+// PURE: จัดอันดับ candidate (จาก computeDecision) ด้วย conviction จริง + ปรับ zone/earnings/overweight แล้วแบ่งงบ
+function allocationRank(candidates, weightMap, opts = {}) {
+  const maxW = opts.maxWeightPct != null ? opts.maxWeightPct : 15;   // เพดานน้ำหนัก: overweight กว่านี้ = ไม่รับเงินใหม่
+  const budget = +opts.budget || 0;
+  const wm = weightMap || {};
+  const ranked = (candidates || []).filter(c => c && c.conviction != null).map(c => {
+    const w = wm[c.symbol] || 0;
+    const reasons = [];
+    let eligible = true;
+    if (c.stance === 'avoid') { eligible = false; reasons.push('engine = avoid'); }
+    if (w >= maxW) { eligible = false; reasons.push(`overweight แล้ว ${(+w).toFixed(1)}% ≥ เพดาน ${maxW}% — ไม่เพิ่มแม้คะแนนดี`); }
+    let zone = 'n/a';
+    if (c.entry > 0 && c.price > 0) {
+      const overPct = (c.price - c.entry) / c.entry * 100;
+      if (c.price <= c.entry * 1.02) zone = 'in';
+      else if (c.price <= c.entry * 1.05) zone = 'near';
+      else { zone = 'above'; reasons.push(`เกิน entry zone +${overPct.toFixed(1)}% — รอย่อ`); }
+    }
+    const ed = c.earnings && c.earnings.daysUntil;
+    const earnSoon = ed != null && ed >= 0 && ed <= 7;
+    if (earnSoon && ed <= 3) { eligible = false; reasons.push(`งบ ≤${ed} วัน — รอผ่านงบก่อน`); }
+    else if (earnSoon) reasons.push(`งบอีก ${ed} วัน — ลดน้ำหนัก`);
+    let allocScore = c.conviction;
+    if (zone === 'near') allocScore -= 5;
+    if (zone === 'above') allocScore -= 15;
+    if (earnSoon) allocScore -= 8;
+    if (w > 0 && w < maxW) allocScore += Math.round((maxW - w) / maxW * 5);   // underweight bonus เล็กน้อย (สูงสุด +5)
+    return { symbol: c.symbol, name: c.name, conviction: c.conviction, stance: c.stance, weight: +(+w).toFixed(2),
+      zone, earnSoon, eligible, allocScore: Math.round(allocScore), reasons, price: c.price, entry: c.entry };
+  }).sort((a, b) => b.allocScore - a.allocScore);
+  // แบ่งงบ: เฉพาะ eligible + ไม่ above-zone · top 3 · สัดส่วนตาม allocScore · ที่เหลือเข้า cash
+  const fundable = ranked.filter(r => r.eligible && r.zone !== 'above').slice(0, 3);
+  const sumScore = fundable.reduce((s, r) => s + Math.max(0, r.allocScore), 0);
+  let allocations = [], allocated = 0;
+  if (budget > 0 && sumScore > 0) {
+    allocations = fundable.map(r => {
+      const usd = +(budget * Math.max(0, r.allocScore) / sumScore).toFixed(2);
+      const shares = r.price > 0 ? +(usd / r.price).toFixed(4) : null;
+      allocated += usd;
+      return { symbol: r.symbol, usd, shares, zone: r.zone, allocScore: r.allocScore };
+    });
+  }
+  const toCash = budget > 0 ? +(budget - allocated).toFixed(2) : 0;
+  return { ranked, allocations, budget, allocated: +allocated.toFixed(2), toCash, maxWeightPct: maxW };
+}
+async function computeAllocation(env, budget) {
+  const dec = await computeDecision(env).catch(() => null);
+  if (!dec || dec.error) return { ok: false, error: (dec && dec.error) || 'decision engine error' };
+  const port = await computePortfolio(env).catch(() => null);
+  const weightMap = {};
+  if (port && port.positions) port.positions.forEach(p => { if (p.ok) weightMap[p.symbol] = p.weight; });
+  const r = allocationRank(dec.candidates, weightMap, { budget: +budget || 0 });
+  return {
+    ok: true, updated: new Date().toISOString(), regime: dec.regime.regime, buyThresh: dec.buyThresh,
+    budget: r.budget, allocations: r.allocations, allocated: r.allocated, toCash: r.toCash, maxWeightPct: r.maxWeightPct,
+    ranked: r.ranked,
+    assumptions: [
+      'อันดับใช้ conviction จริงจาก decision engine (5 มิติ regime-weighted) — ไม่ใช่ LLM เดา',
+      'น้ำหนักปัจจุบันจากพอร์ตจริง · overweight ≥ ' + r.maxWeightPct + '% = ตัดออกจากการรับเงินใหม่',
+      'การแบ่งงบเป็น "ลำดับความน่าสนใจ" ไม่ใช่คำสั่งซื้อ · เช็ค entry zone + งบ ก่อนเข้าจริงเสมอ',
+    ],
+    note: 'M37 Capital Allocation Ranking (deterministic) — ไม่ใช่คำแนะนำการลงทุน',
+  };
+}
+
+// ---------- M38 — PORTFOLIO SCENARIO ----------
+// PURE: ผลพอร์ตต่อฉาก = Σ(weight × beta × marketMove) · expected = Σ(prob × ผลฉาก)
+function scenarioOutcome(holdings, betaMap, scenarios) {
+  const ok = (holdings || []).filter(h => h && h.value > 0);
+  const totalVal = ok.reduce((s, h) => s + h.value, 0);
+  const rnd = (x, d = 2) => (x == null || isNaN(x)) ? null : +Number(x).toFixed(d);
+  const out = (scenarios || []).map(sc => {
+    let ret = 0, cov = 0;
+    const moves = [];
+    ok.forEach(h => {
+      const b = betaMap[h.symbol];
+      if (b == null || totalVal <= 0) return;
+      const w = h.value / totalVal;
+      const stockMove = b * sc.marketMove;        // ผลหุ้นตัวนั้น ≈ beta × ตลาด
+      ret += w * stockMove;
+      cov += w;
+      moves.push({ symbol: h.symbol, movePct: rnd(stockMove), contribPct: rnd(w * stockMove) });
+    });
+    moves.sort((a, b) => (b.movePct || 0) - (a.movePct || 0));
+    return { key: sc.key, label: sc.label, prob: sc.prob, marketMove: sc.marketMove,
+      portReturnPct: rnd(ret), betaCoveragePct: rnd(cov * 100),
+      bestStock: moves[0] || null, worstStock: moves[moves.length - 1] || null };
+  });
+  const probSum = (scenarios || []).reduce((s, x) => s + (x.prob || 0), 0);
+  const expected = out.reduce((s, o, i) => s + ((scenarios[i].prob || 0) / 100) * (o.portReturnPct || 0), 0);
+  return { scenarios: out, expectedReturnPct: rnd(expected), probSum };
+}
+// ความน่าจะเป็นเริ่มต้นตาม regime (subjective — ปรับได้ผ่าน query) · marketMove = สมมติฐานขนาดการเคลื่อนของตลาด
+function defaultScenarios(regime) {
+  const probByRegime = {
+    'risk-on':  { dovish: 45, neutral: 35, hawkish: 20 },
+    'neutral':  { dovish: 35, neutral: 40, hawkish: 25 },
+    'risk-off': { dovish: 25, neutral: 35, hawkish: 40 },
+  };
+  const p = probByRegime[regime] || probByRegime['neutral'];
+  return [
+    { key: 'dovish',  label: 'Fed Dovish — ลดดอก / soft landing', prob: p.dovish,  marketMove: 8 },
+    { key: 'neutral', label: 'Fed Neutral — คงดอก / sideways',     prob: p.neutral, marketMove: 2 },
+    { key: 'hawkish', label: 'Fed Hawkish — คงดอกนาน / shock',     prob: p.hawkish, marketMove: -12 },
+  ];
+}
+async function computeScenario(env, overrides = {}) {
+  const [regime, port, wd] = await Promise.all([
+    getRegime(env),
+    computePortfolio(env).catch(() => null),
+    computeWatchlistData(env, { cached: true }).catch(() => null),
+  ]);
+  const betaMap = {};
+  if (wd && wd.stocks) wd.stocks.forEach(s => { if (s && s.symbol && s.beta1y != null) betaMap[String(s.symbol).toUpperCase()] = s.beta1y; });
+  const holdings = (port && port.positions) ? port.positions.filter(h => h.ok) : [];
+  let scenarios = defaultScenarios(regime.regime);
+  // override prob ผ่าน query (?dovish=40&neutral=35&hawkish=25) — ผู้ใช้กำหนดเอง ไม่ให้ LLM ปั้น
+  let custom = false;
+  scenarios = scenarios.map(s => {
+    if (overrides[s.key] != null && !isNaN(+overrides[s.key])) { custom = true; return { ...s, prob: +overrides[s.key] }; }
+    return s;
+  });
+  const r = scenarioOutcome(holdings, betaMap, scenarios);
+  return {
+    ok: true, updated: new Date().toISOString(), regime: regime.regime,
+    scenarios: r.scenarios, expectedReturnPct: r.expectedReturnPct, probSum: r.probSum, probCustom: custom,
+    assumptions: [
+      'ความน่าจะเป็นแต่ละฉากเป็นค่า subjective (default ตาม regime · ปรับเองได้ผ่าน ?dovish=&neutral=&hawkish=)',
+      'ผลพอร์ต ≈ Σ(น้ำหนัก × beta × การเคลื่อนของตลาดสมมติ) · beta เป็นค่าประมาณ 1y',
+      'marketMove สมมติ (dovish +8% / neutral +2% / hawkish −12%) เป็นฉากตัวอย่าง — ใช้ชี้ทิศทาง/ขนาดความเสี่ยงสัมพัทธ์ ไม่ใช่พยากรณ์ราคา',
+      r.probSum !== 100 ? `⚠️ ผลรวมความน่าจะเป็น = ${r.probSum}% (ไม่ครบ 100%) → expected return จะเพี้ยน` : null,
+    ].filter(Boolean),
+    note: 'M38 Portfolio Scenario (deterministic math, subjective probabilities) — ไม่ใช่คำแนะนำการลงทุน',
+  };
+}
+
+// /defense — HTML สรุป Portfolio Defense (white card style เหมือน /risk /portfolio)
+async function handleDefense(env) {
+  const d = await computeDefense(env).catch(e => ({ error: e && e.message }));
+  const esc = s => String(s == null ? '' : s).replace(/[&<>]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
+  const f = (x, dg = 2) => (x == null) ? '—' : Number(x).toLocaleString('en-US', { minimumFractionDigits: dg, maximumFractionDigits: dg });
+  if (d.error) return new Response(`<p>error: ${esc(d.error)}</p>`, { status: 500, headers: { ...CORS, 'Content-Type': 'text/html; charset=utf-8' } });
+  const tm = new Date(d.updated).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', dateStyle: 'medium', timeStyle: 'short' });
+  const lvlCol = { 0: '#16a34a', 1: '#ca8a04', 2: '#ea580c', 3: '#dc2626' }[d.level] || '#666';
+  const trigHtml = d.triggers.length
+    ? d.triggers.map(t => `<li>${esc(t)}</li>`).join('')
+    : `<li style="color:#16a34a">ไม่มี trigger ตลาดเปิด${d.headroom.length ? ' — ' + d.headroom.map(esc).join(' · ') : ''}</li>`;
+  const trimRows = (d.trimPlan || []).map(p => `<tr>
+    <td><b>${esc(p.symbol)}</b> ${p.core ? '<span class=tag>core</span>' : ''}<br><span class=n>${esc(p.name)}</span></td>
+    <td class=num>${p.beta == null ? '—' : f(p.beta)}</td>
+    <td class=num>${f(p.weight)}%</td>
+    <td class=num>${p.keep ? '<span style="color:#16a34a">เก็บไว้</span>' : f(p.trimPct, 0) + '%'}</td>
+    <td class=num>${p.sharesToSell ? qtyFmt(p.sharesToSell) : '—'}</td>
+    <td class=num>${p.valueFreed ? '$' + f(p.valueFreed, 0) : '—'}</td></tr>`).join('');
+  const txt = `Portfolio Defense — ระดับ ${d.level} (${d.levelTag}) · regime ${d.regime.regime} · VIX ${f(d.regime.vix)}\n`
+    + `Trigger: ${d.triggers.length ? d.triggers.join(' | ') : 'ไม่มี'}\nAction: ${d.action}\n`
+    + `Weighted beta ≈ ${f(d.weightedBeta)} (ครอบคลุม ${f(d.betaCoveragePct, 0)}% ของพอร์ต) · ถ้า trim ตามแผนได้เงินสด ~$${f(d.totalFreed, 0)}`;
+  const html = `<!DOCTYPE html><html lang=th><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Portfolio Defense — L${d.level}</title>
+<style>body{font-family:system-ui,'Segoe UI',sans-serif;max-width:900px;margin:18px auto;padding:0 14px;color:#111;background:#fff;line-height:1.5}
+h1{font-size:20px;margin:0 0 4px}.sub{color:#666;font-size:13px;margin-bottom:14px}
+.lvl{display:inline-block;padding:6px 14px;border-radius:8px;color:#fff;font-weight:800;font-size:18px;background:${lvlCol}}
+.box{border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px;margin:12px 0}
+.box.act{background:#fff7ed;border-color:#fed7aa}.box h3{margin:0 0 6px;font-size:14px}
+ul{margin:6px 0;padding-left:20px}table{border-collapse:collapse;width:100%;font-size:13px;margin-top:6px}
+th,td{border:1px solid #e5e7eb;padding:6px 8px;text-align:left}th{background:#f3f4f6}
+.num{text-align:right;font-variant-numeric:tabular-nums}.n{color:#888;font-size:11px}.tag{background:#dbeafe;color:#1e40af;font-size:10px;padding:1px 5px;border-radius:4px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:10px 0}
+.kpi{border:1px solid #e5e7eb;border-radius:8px;padding:9px 12px;background:#fafafa}.kpi .lab{font-size:12px;color:#666}.kpi .val{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+.asm{color:#777;font-size:12px;margin-top:6px}.asm li{margin:2px 0}
+.txt{white-space:pre-wrap;font-size:12.5px;color:#444;margin-top:16px;border-top:1px solid #eee;padding-top:10px}</style></head>
+<body>
+<h1>🛡️ Portfolio Defense / Kill Switch</h1>
+<div class=sub>อัปเดต ${esc(tm)} (เวลาไทย) · regime <b>${esc(d.regime.regime)}</b> · VIX ${f(d.regime.vix)} · SPX ${f(d.regime.spxAboveEma200Pct)}% / NDX ${f(d.regime.ndxAboveEma200Pct)}% เทียบ EMA200</div>
+<div class=lvl>ระดับ ${d.level} — ${esc(d.levelTag)}</div>
+<div class=kpis>
+  <div class=kpi><div class=lab>Weighted Beta พอร์ต</div><div class=val>${f(d.weightedBeta)}</div></div>
+  <div class=kpi><div class=lab>มูลค่าพอร์ต</div><div class=val>$${f(d.portfolioValue, 0)}</div></div>
+  <div class=kpi><div class=lab>เงินสดถ้า trim ตามแผน</div><div class=val>$${f(d.totalFreed, 0)}</div></div>
+</div>
+<div class=box><h3>🚨 Trigger ที่เปิด (${d.triggers.length})</h3><ul>${trigHtml}</ul></div>
+<div class="box act"><h3>📌 Action ระดับ ${d.level}</h3>${esc(d.action)}</div>
+<div class=box><h3>✂️ แผน Trim (tactical beta สูง trim ก่อน · core เก็บไว้)</h3>
+<table><thead><tr><th>หุ้น</th><th class=num>Beta</th><th class=num>น้ำหนัก</th><th class=num>Trim</th><th class=num>ขาย (หุ้น)</th><th class=num>ได้เงินสด</th></tr></thead>
+<tbody>${trimRows || '<tr><td colspan=6 style="text-align:center;color:#888;padding:16px">ไม่มี position ในพอร์ต</td></tr>'}</tbody></table></div>
+<div class=box><h3>📋 สมมติฐาน (ห้ามอ่านเป็นตัวเลขเป๊ะ)</h3><ul class=asm>${(d.assumptions || []).map(a => `<li>${esc(a)}</li>`).join('')}</ul></div>
+<div class=txt>สรุปข้อความ (สำหรับ AI วิเคราะห์):
+${esc(txt)}</div>
+</body></html>`;
+  return new Response(html, { headers: { ...CORS, 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
+}
+
 export default {
-  // cron — (1) "*/15" เขียน signal ลง KV (single source)  (2) "0 22" snapshot + surprise alert รายวัน
+  // cron — (1) "*/15" signal→KV  (2) "0 22 1-5" snapshot+surprise+heartbeat รายวัน  (3) "0 23 6" backup journal รายสัปดาห์
   async scheduled(event, env, ctx) {
+    _env = env;
     if (event.cron === '0 22 * * 1-5') {
-      // warm earnings cache → snapshot → surprise → Telegram
-      ctx.waitUntil(
-        env.WATCHLIST.get('main')
-          .then(raw => { const syms = (JSON.parse(raw || '[]') || []).map(w => w && w.symbol).filter(Boolean); return warmEarnings(env, syms).then(() => warmFundamentals(env, syms)); })
-          .then(() => logDailySnapshot(env))
-          .then(() => runSurpriseAlert(env))
-          .catch(e => console.error('daily cron:', e && e.message))
-      );
+      ctx.waitUntil(runDailyCron(env));
+    } else if (event.cron === '0 23 * * 6') {
+      ctx.waitUntil(runWeeklyBackup(env).catch(e => console.error('weekly backup:', e && e.message)));
     } else {
       ctx.waitUntil(writeSignalsToKV(env).catch(e => console.error('writeSignalsToKV:', e && e.message)));
     }
   },
   async fetch(request, env, ctx) {
+    _env = env;
     const url = new URL(request.url);
 
     // /api/secret-check — เช็คว่า worker เห็น secret ไหม (ไม่เปิดค่า) debug
     if (url.pathname === '/api/secret-check') {
+      const gate = requireAdmin(request, env, url); if (gate) return gate;
       return new Response(JSON.stringify({
-        gemini: !!env.GEMINI_API_KEY, telegram_token: !!env.TELEGRAM_BOT_TOKEN, telegram_chat: !!env.TELEGRAM_CHAT_ID,
+        gemini: !!env.GEMINI_API_KEY, telegram_token: !!env.TELEGRAM_BOT_TOKEN, telegram_chat: !!env.TELEGRAM_CHAT_ID, heartbeat: !!env.HEARTBEAT_URL, admin: !!env.ADMIN_TOKEN, twelvedata: !!env.TWELVEDATA_API_KEY,
       }), { headers: { ...CORS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+    }
+
+    // /api/source-test — เทียบ Yahoo (raw) vs Stooq (fallback) ต่อ symbol · ยืนยันว่า fallback พร้อมใช้ (debug ข้อ 6)
+    if (url.pathname === '/api/source-test') {
+      const gate = requireAdmin(request, env, url); if (gate) return gate;
+      const sym = (url.searchParams.get('sym') || '^GSPC').toUpperCase();
+      const range = url.searchParams.get('range') || '1y';
+      const brief = r => r && r.ok
+        ? { ok: true, via: r.via, price: r.price, bars: r.closes && r.closes.length, lastBar: r.timestamps && r.timestamps.length ? new Date(r.timestamps[r.timestamps.length - 1] * 1000).toISOString().slice(0, 10) : null }
+        : { ok: false, error: r && r.error };
+      const [yahoo, fallback, wrapped] = await Promise.all([
+        yahooDailyRaw(sym, range, '1d').catch(e => ({ ok: false, error: e && e.message })),
+        twelveDailyFallback(sym, range).catch(e => ({ ok: false, error: e && e.message })),
+        yahooDaily(sym, range, '1d').catch(e => ({ ok: false, error: e && e.message })),
+      ]);
+      return new Response(JSON.stringify({ sym, fallbackSymbol: toTwelveSymbol(sym), yahoo: brief(yahoo), fallback: brief(fallback), wrapper: brief(wrapped) }, null, 2), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
     }
 
     // /api/gemini-test — ลองหลาย model หาตัวที่ key นี้ใช้ได้ฟรี (debug Phase 4)
     if (url.pathname === '/api/gemini-test') {
+      const gate = requireAdmin(request, env, url); if (gate) return gate;
       const key = env.GEMINI_API_KEY;
       if (!key) return new Response(JSON.stringify({ error: 'no key' }), { headers: { ...CORS, 'Content-Type': 'application/json' } });
       const models = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-flash-latest'];
@@ -2170,6 +2686,7 @@ export default {
 
     // /api/earnings-test — ทดสอบดึงวันงบ (debug catalyst)
     if (url.pathname === '/api/earnings-test') {
+      const gate = requireAdmin(request, env, url); if (gate) return gate;
       const sym = (url.searchParams.get('sym') || 'AVGO').toUpperCase();
       const r = await fetchEarnings(sym).catch(e => ({ error: e && e.message }));
       return new Response(JSON.stringify({ sym, result: r }), { headers: { ...CORS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
@@ -2177,6 +2694,7 @@ export default {
 
     // /api/warm-earnings — อุ่น cache วันงบทุกตัวใน watchlist (ครั้งเดียว/วัน · cron ทำให้อยู่แล้ว)
     if (url.pathname === '/api/warm-earnings') {
+      const gate = requireAdmin(request, env, url); if (gate) return gate;
       let syms = [];
       try { const raw = await env.WATCHLIST.get('main'); syms = (JSON.parse(raw || '[]') || []).map(w => w && w.symbol).filter(Boolean); } catch (e) {}
       await warmEarnings(env, syms);
@@ -2188,32 +2706,41 @@ export default {
 
     // /api/refresh-signals — บังคับคำนวณ+เขียน KV ทันที (ทดสอบ / อุ่นเครื่องหลัง deploy)
     if (url.pathname === '/api/refresh-signals') {
+      const gate = requireAdmin(request, env, url); if (gate) return gate;
       const sig = await writeSignalsToKV(env).catch(e => ({ error: e && e.message }));
       return new Response(JSON.stringify({ ok: !sig.error, signals: sig }), { headers: { ...CORS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
     }
 
-    // /api/snapshot — บังคับ snapshot ลง D1 ทันที (ทดสอบ Phase 0.5 / เก็บย้อนวันนี้)
+    // /api/snapshot — บังคับ snapshot ลง D1 ทันที (ทดสอบ Phase 0.5 / เก็บย้อนวันนี้) · ?force=1 ข้าม holiday guard
     if (url.pathname === '/api/snapshot') {
-      const r = await logDailySnapshot(env).catch(e => ({ ok: false, error: e && e.message }));
+      const gate = requireAdmin(request, env, url); if (gate) return gate;
+      const force = ['1', 'true', 'yes'].includes((url.searchParams.get('force') || '').toLowerCase());
+      const r = await logDailySnapshot(env, force).catch(e => ({ ok: false, error: e && e.message }));
       return new Response(JSON.stringify(r), { headers: { ...CORS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
     }
 
-    // /api/journal-export — สำรองข้อมูล D1 (ข้อมูลย้อนเก็บไม่ได้) · ?format=csv|json · ?days=N
+    // /api/journal-export — สำรองข้อมูล D1 (ข้อมูลย้อนเก็บไม่ได้) · ?format=csv|json · ?days=N · gated (เปิดข้อมูลดิบ)
     if (url.pathname === '/api/journal-export') {
+      const gate = requireAdmin(request, env, url); if (gate) return gate;
       if (!env.JOURNAL) return new Response(JSON.stringify({ error: 'no D1' }), { status: 503, headers: { ...CORS, 'Content-Type': 'application/json' } });
       const fmt = (url.searchParams.get('format') || 'json').toLowerCase();
       const days = Math.min(parseInt(url.searchParams.get('days') || '3650', 10) || 3650, 3650);
+      if (fmt === 'csv') {
+        const { csv } = await journalCsv(env, days);
+        return new Response(csv, { headers: { ...CORS, 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="journal.csv"', 'Cache-Control': 'no-store' } });
+      }
       const since = new Date(Date.now() - days * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
       const { results } = await env.JOURNAL.prepare(
         `SELECT * FROM signal_history WHERE ts_date >= ? ORDER BY ts_date, symbol`
       ).bind(since).all();
-      if (fmt === 'csv') {
-        const cols = ['ts_date','symbol','signal','price','regular_close','rsi','rsi_weekly','macd_hist','cmf','rs_vs_spx','atr14','beta1y','ema50','ema200','sma200','change_pct','spx_change'];
-        const esc = v => v == null ? '' : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
-        const lines = [cols.join(',')].concat((results || []).map(r => cols.map(c => esc(r[c])).join(',')));
-        return new Response(lines.join('\n'), { headers: { ...CORS, 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="journal.csv"', 'Cache-Control': 'no-store' } });
-      }
       return new Response(JSON.stringify({ count: (results || []).length, rows: results }, null, 2), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+    }
+
+    // /api/backup-now — บังคับ backup journal เข้า Telegram ทันที (ทดสอบ cron เสาร์) · gated
+    if (url.pathname === '/api/backup-now') {
+      const gate = requireAdmin(request, env, url); if (gate) return gate;
+      const r = await runWeeklyBackup(env).catch(e => ({ ok: false, error: e && e.message }));
+      return new Response(JSON.stringify(r), { headers: { ...CORS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
     }
 
     // /api/performance — วัดผลย้อนหลัง JSON (Phase 1)
@@ -2270,6 +2797,27 @@ export default {
       const r = await computeDecision(env).catch(e => ({ error: e && e.message }));
       return new Response(JSON.stringify(r, null, 2), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
     }
+
+    // ===== CIO LAYER (Phase 5 · deterministic) =====
+    // /api/defense — M36 Portfolio Defense / Kill Switch JSON
+    if (url.pathname === '/api/defense') {
+      const r = await computeDefense(env).catch(e => ({ error: e && e.message }));
+      return new Response(JSON.stringify(r, null, 2), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+    }
+    // /api/allocate — M37 Capital Allocation Ranking JSON · ?budget=10000 (USD)
+    if (url.pathname === '/api/allocate') {
+      const budget = +(url.searchParams.get('budget') || '0') || 0;
+      const r = await computeAllocation(env, budget).catch(e => ({ ok: false, error: e && e.message }));
+      return new Response(JSON.stringify(r, null, 2), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+    }
+    // /api/scenario — M38 Portfolio Scenario JSON · ?dovish=&neutral=&hawkish= (override prob)
+    if (url.pathname === '/api/scenario') {
+      const ov = { dovish: url.searchParams.get('dovish'), neutral: url.searchParams.get('neutral'), hawkish: url.searchParams.get('hawkish') };
+      const r = await computeScenario(env, ov).catch(e => ({ ok: false, error: e && e.message }));
+      return new Response(JSON.stringify(r, null, 2), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+    }
+    // /defense — M36 HTML (ดู/ก๊อปในเบราว์เซอร์ + ให้ AI browse)
+    if (url.pathname === '/defense') return handleDefense(env);
 
     // /api/positions-watch — เตือน position ใกล้/หลุด invalidation
     if (url.pathname === '/api/positions-watch') {
@@ -2539,6 +3087,10 @@ export default {
       if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
       return handlePortfolioJson(env);
     }
+    if (url.pathname === '/api/catalysts') {
+      if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
+      return handleCatalysts(env, +(url.searchParams.get('days') || 180));
+    }
     if (url.pathname === '/risk') {
       if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
       return handleRisk(env);
@@ -2569,6 +3121,13 @@ export default {
       const dest = `${url.origin}/text?ts=${Date.now()}`;
       return new Response(null, { status: 302, headers: { ...CORS, 'Location': dest, 'Cache-Control': 'no-store, no-cache, must-revalidate' } });
     }
+    // /api/signals — อ่านป้าย BUY/HOLD/SELL ปัจจุบันจาก KV (read-only) = single source ให้ GitHub-Actions fallback (alert.mjs) ดึงผ่าน HTTP ได้
+    // (CF alerts worker อ่านผ่าน KV binding ตรงๆ · GitHub อยู่นอก CF เลยต้องผ่าน endpoint นี้) · คืน {updated, signals:{SYM:'BUY'}}
+    if (url.pathname === '/api/signals') {
+      const raw = await env.WATCHLIST.get('signals');
+      return new Response(raw || JSON.stringify({ updated: null, signals: {} }),
+        { headers: { ...CORS, 'Content-Type': 'application/json', 'Cache-Control': 'max-age=60' } });
+    }
     // State endpoints — เก็บใน KV namespace WATCHLIST (key ต่างกันต่อ resource) เพื่อซิงค์ข้ามเครื่อง
     if (url.pathname === '/api/watchlist') return handleKvJson(request, env, 'main', x => Array.isArray(x));
     if (url.pathname === '/api/positions') return handleKvJson(request, env, 'positions', x => Array.isArray(x));
@@ -2587,3 +3146,7 @@ export default {
     return res;
   },
 };
+
+// Named exports สำหรับ unit test (node --test) — pure functions ล้วน · Wrangler ใช้แค่ default ไม่กระทบ deploy
+export { convictionScore, labelFromConviction, buyThreshFor, positionSize, corrPenaltyFor, CONV_WEIGHTS,
+  defenseAssess, defenseHeadroom, DEFENSE_LEVELS, allocationRank, scenarioOutcome, defaultScenarios };

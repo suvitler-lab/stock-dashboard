@@ -96,12 +96,20 @@
   .pill{font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px;letter-spacing:.4px;white-space:nowrap}
   .pill.buy{background:#0f2a1a;color:#4ade80} .pill.sell{background:#2a1416;color:#f87171}
   .pill.hold{background:#27211040;color:#fcd34d;border:1px solid #3a2f15} .pill.na{background:#23262f;color:var(--dim)}
+  .pill.new{background:rgba(96,165,250,.13);color:#7cb5ff;border:1px solid rgba(96,165,250,.30)}
   html[data-theme="light"] .pill.buy{background:#dcfce7;color:#15803d}
   html[data-theme="light"] .pill.sell{background:#fee2e2;color:#b91c1c}
   html[data-theme="light"] .pill.hold{background:#fef9c3;color:#a16207;border-color:#fde68a}
   html[data-theme="light"] .pill.na{background:#eef1f6;color:#94a0b2}
+  html[data-theme="light"] .pill.new{background:#dbeafe;color:#2563eb;border-color:#bfdbfe}
   .sym{font-weight:700;font-family:'Prompt'} .symx{font-size:11px;color:var(--dim)}
   .rsi-b{display:inline-block;min-width:34px;text-align:center;padding:2px 0;border-radius:6px;font-size:12.5px;font-weight:700}
+  /* หุ้นใหม่ / ข้อมูลย้อนหลังไม่พอ — โชว์ให้รู้ว่า "ระบบไม่พัง แค่หุ้นยังใหม่" */
+  .spark-na{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);font-weight:600;white-space:nowrap}
+  .spark-na::before{content:"";display:inline-block;width:30px;border-top:1.6px dashed currentColor;opacity:.55}
+  tr.row-new td{background:rgba(96,165,250,.045)}
+  tr.row-new td:first-child{box-shadow:inset 3px 0 0 rgba(96,165,250,.5)}
+  tr.row-new .sym{opacity:.92}
 
   /* ---------- Command Center ---------- */
   .cc{margin-bottom:24px}
@@ -156,6 +164,18 @@
   .seg button{padding:6px 13px;font-size:12.5px;color:var(--muted);font-weight:600;transition:.12s}
   .seg button.on{background:var(--brand);color:#fff}
   .seg button:not(.on):hover{color:var(--txt);background:var(--panel)}
+  /* การ์ด watchlist — เห็นข้อมูลครบบนจอแคบ ไม่โดน hide-sm ตัด */
+  .wl-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(225px,1fr));gap:12px}
+  .wl-card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:13px 14px;transition:.14s}
+  .wl-card.click{cursor:pointer}
+  .wl-card.click:hover{border-color:var(--brand);transform:translateY(-2px);box-shadow:var(--shadow)}
+  .wl-card-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}
+  .wl-card-px{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .wl-card-px .ah{margin-top:0}
+  .wl-card-spark{margin:10px 0 9px;min-height:46px;display:flex;align-items:center}
+  .wl-card-foot{display:flex;align-items:center;gap:9px;padding-top:9px;border-top:1px solid var(--line)}
+  .wl-card.row-new{background:rgba(96,165,250,.06)}
+  .wl-card.row-new:not(:hover){border-color:rgba(96,165,250,.3)}
   .sel{width:auto;padding:7px 11px;font-size:12.5px}
   .wl-count{font-size:12px;color:var(--dim);margin-left:auto}
   .alloc{height:5px;border-radius:3px;background:var(--line);overflow:hidden;min-width:46px}
@@ -175,6 +195,15 @@
   .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
   .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:11px}
   .modal-acts{display:flex;gap:10px;justify-content:flex-end;margin-top:20px;flex-wrap:wrap}
+  /* master-detail: พาเนลรายละเอียด docked ขวา (เฉพาะจอกว้าง ≥1080px) — ลิสต์ซ้ายยังคลิกได้ */
+  .dock-wrap{display:contents}
+  .dock{position:fixed;top:0;right:0;height:100vh;width:480px;z-index:90;background:var(--panel);
+    border-left:1px solid var(--line);box-shadow:-14px 0 44px rgba(0,0,0,.42);overflow-y:auto;
+    padding:22px;animation:dockin .2s ease}
+  @keyframes dockin{from{transform:translateX(26px);opacity:.5}to{transform:none;opacity:1}}
+  .wrap.dock-open{max-width:none;margin:0;padding-right:500px}
+  tr.sel td{background:rgba(59,130,246,.1)} tr.sel td:first-child{box-shadow:inset 3px 0 0 #3b82f6}
+  .wl-card.sel{border-color:#3b82f6;box-shadow:0 0 0 1px #3b82f6}
 
   .banner{background:linear-gradient(135deg,rgba(59,130,246,.14),rgba(139,92,246,.08));border:1px solid #2c3550;border-radius:var(--radius);padding:22px;margin-bottom:22px}
   .banner h3{font-size:17px;margin-bottom:10px}

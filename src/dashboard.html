@@ -97,12 +97,20 @@
   .pill{font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px;letter-spacing:.4px;white-space:nowrap}
   .pill.buy{background:#0f2a1a;color:#4ade80} .pill.sell{background:#2a1416;color:#f87171}
   .pill.hold{background:#27211040;color:#fcd34d;border:1px solid #3a2f15} .pill.na{background:#23262f;color:var(--dim)}
+  .pill.new{background:rgba(96,165,250,.13);color:#7cb5ff;border:1px solid rgba(96,165,250,.30)}
   html[data-theme="light"] .pill.buy{background:#dcfce7;color:#15803d}
   html[data-theme="light"] .pill.sell{background:#fee2e2;color:#b91c1c}
   html[data-theme="light"] .pill.hold{background:#fef9c3;color:#a16207;border-color:#fde68a}
   html[data-theme="light"] .pill.na{background:#eef1f6;color:#94a0b2}
+  html[data-theme="light"] .pill.new{background:#dbeafe;color:#2563eb;border-color:#bfdbfe}
   .sym{font-weight:700;font-family:'Prompt'} .symx{font-size:11px;color:var(--dim)}
   .rsi-b{display:inline-block;min-width:34px;text-align:center;padding:2px 0;border-radius:6px;font-size:12.5px;font-weight:700}
+  /* หุ้นใหม่ / ข้อมูลย้อนหลังไม่พอ — โชว์ให้รู้ว่า "ระบบไม่พัง แค่หุ้นยังใหม่" */
+  .spark-na{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);font-weight:600;white-space:nowrap}
+  .spark-na::before{content:"";display:inline-block;width:30px;border-top:1.6px dashed currentColor;opacity:.55}
+  tr.row-new td{background:rgba(96,165,250,.045)}
+  tr.row-new td:first-child{box-shadow:inset 3px 0 0 rgba(96,165,250,.5)}
+  tr.row-new .sym{opacity:.92}
 
   /* ---------- Command Center ---------- */
   .cc{margin-bottom:24px}
@@ -157,6 +165,18 @@
   .seg button{padding:6px 13px;font-size:12.5px;color:var(--muted);font-weight:600;transition:.12s}
   .seg button.on{background:var(--brand);color:#fff}
   .seg button:not(.on):hover{color:var(--txt);background:var(--panel)}
+  /* การ์ด watchlist — เห็นข้อมูลครบบนจอแคบ ไม่โดน hide-sm ตัด */
+  .wl-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(225px,1fr));gap:12px}
+  .wl-card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:13px 14px;transition:.14s}
+  .wl-card.click{cursor:pointer}
+  .wl-card.click:hover{border-color:var(--brand);transform:translateY(-2px);box-shadow:var(--shadow)}
+  .wl-card-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}
+  .wl-card-px{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .wl-card-px .ah{margin-top:0}
+  .wl-card-spark{margin:10px 0 9px;min-height:46px;display:flex;align-items:center}
+  .wl-card-foot{display:flex;align-items:center;gap:9px;padding-top:9px;border-top:1px solid var(--line)}
+  .wl-card.row-new{background:rgba(96,165,250,.06)}
+  .wl-card.row-new:not(:hover){border-color:rgba(96,165,250,.3)}
   .sel{width:auto;padding:7px 11px;font-size:12.5px}
   .wl-count{font-size:12px;color:var(--dim);margin-left:auto}
   .alloc{height:5px;border-radius:3px;background:var(--line);overflow:hidden;min-width:46px}
@@ -176,6 +196,15 @@
   .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
   .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:11px}
   .modal-acts{display:flex;gap:10px;justify-content:flex-end;margin-top:20px;flex-wrap:wrap}
+  /* master-detail: พาเนลรายละเอียด docked ขวา (เฉพาะจอกว้าง ≥1080px) — ลิสต์ซ้ายยังคลิกได้ */
+  .dock-wrap{display:contents}
+  .dock{position:fixed;top:0;right:0;height:100vh;width:480px;z-index:90;background:var(--panel);
+    border-left:1px solid var(--line);box-shadow:-14px 0 44px rgba(0,0,0,.42);overflow-y:auto;
+    padding:22px;animation:dockin .2s ease}
+  @keyframes dockin{from{transform:translateX(26px);opacity:.5}to{transform:none;opacity:1}}
+  .wrap.dock-open{max-width:none;margin:0;padding-right:500px}
+  tr.sel td{background:rgba(59,130,246,.1)} tr.sel td:first-child{box-shadow:inset 3px 0 0 #3b82f6}
+  .wl-card.sel{border-color:#3b82f6;box-shadow:0 0 0 1px #3b82f6}
 
   .banner{background:linear-gradient(135deg,rgba(59,130,246,.14),rgba(139,92,246,.08));border:1px solid #2c3550;border-radius:var(--radius);padding:22px;margin-bottom:22px}
   .banner h3{font-size:17px;margin-bottom:10px}
@@ -473,8 +502,34 @@ function usMarketStatus(){
 }
 
 /* ============================================================ APP */
+/* ---------- M37 Capital Allocation — เงินใหม่ใส่ตัวไหนก่อน (interactive, แยก component กัน hooks) ---------- */
+function AllocCard(){
+  const [budget,setBudget]=useState(10000);
+  const [res,setRes]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const f=(x)=>x==null?"—":Number(x).toLocaleString("en-US",{maximumFractionDigits:2});
+  const run=async()=>{ setLoading(true); try{ const r=await fetch("/api/allocate?budget="+(+budget||0),{cache:"no-store"}).then(x=>x.ok?x.json():null); if(r&&r.ok) setRes(r); }catch(e){} finally{ setLoading(false); } };
+  const zlab={in:"ในโซน",near:"ใกล้โซน",above:"เกินโซน","n/a":"—"};
+  return (
+    <div style={{margin:"10px 0",border:"1px solid var(--line)",borderRadius:10,padding:"10px 13px"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+        <b style={{fontSize:14}}>💵 เงินใหม่ใส่ตัวไหนก่อน</b><span className="cc-dim" style={{fontSize:11}}>(USD)</span>
+        <input type="number" value={budget} onChange={e=>setBudget(e.target.value)} style={{width:110,marginLeft:"auto",padding:"4px 7px",borderRadius:6,border:"1px solid var(--line)",background:"transparent",color:"inherit"}}/>
+        <button onClick={run} disabled={loading} style={{padding:"5px 12px",borderRadius:6,border:"1px solid var(--line)",background:"transparent",color:"inherit",cursor:"pointer"}}>{loading?"…":"จัดสรร"}</button>
+      </div>
+      {res&&<div style={{marginTop:8}}>
+        {res.allocations.length>0
+          ? res.allocations.map(a=>(<div key={a.symbol} style={{display:"flex",gap:8,fontSize:13,padding:"3px 0"}}><b style={{width:56}}>{a.symbol}</b><span>${f(a.usd)}</span><span className="cc-dim">· {f(a.shares)} หุ้น · {zlab[a.zone]||a.zone}</span></div>))
+          : <div className="cc-dim" style={{fontSize:13}}>ไม่มีตัวเข้าเกณฑ์ตอนนี้ — พักเป็นเงินสด</div>}
+        {res.toCash>0&&<div style={{fontSize:13,marginTop:3}}>💰 เข้าเงินสด: ${f(res.toCash)}</div>}
+        <div style={{fontSize:11,color:"var(--dim)",marginTop:5}}>อันดับจาก conviction จริง · overweight ≥{res.maxWeightPct}% ถูกตัด · เช็ค entry zone ก่อนเข้า · ไม่ใช่คำสั่งซื้อ</div>
+      </div>}
+    </div>
+  );
+}
+
 /* ---------- Command Center — decision-first (ดึงจาก /api/decide + /api/positions-watch) ---------- */
-function CommandCenter({decide,posWatch,perf,tstats,onPick,decideLoading}){
+function CommandCenter({decide,posWatch,perf,tstats,defense,scenario,onPick,decideLoading}){
   if(!decide) return <div className="section" style={{textAlign:"center",color:"var(--dim)",padding:"22px"}}>⏳ กำลังโหลดศูนย์บัญชาการ…</div>;
   const rg=decide.regime||{}, heat=decide.heat||{};
   const RG={"risk-on":["เปิดรับความเสี่ยง","🟢","#22c55e"],"risk-off":["เลี่ยงความเสี่ยง","🔴","#ef4444"],"neutral":["เป็นกลาง","🟡","#f59e0b"]};
@@ -514,6 +569,24 @@ function CommandCenter({decide,posWatch,perf,tstats,onPick,decideLoading}){
           {heat.themeConcentration&&heat.themeConcentration.length>0&&<div className="cc-heat-w">🎯 กระจุก theme: {heat.themeConcentration.join(", ")}</div>}
         </div>
       </div>
+      {defense&&(()=>{
+        const DL={0:"#22c55e",1:"#f59e0b",2:"#fb923c",3:"#ef4444"}[defense.level]||"#646b7a";
+        const trim=(defense.trimPlan||[]).filter(p=>!p.keep&&p.sharesToSell>0).slice(0,3);
+        return (
+          <div style={{margin:"4px 0 10px",border:"1px solid "+DL,borderLeft:"4px solid "+DL,borderRadius:10,padding:"10px 13px",background:"rgba(255,255,255,0.02)"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <b style={{color:DL,fontSize:15}}>🛡️ ป้องกันพอร์ต — ระดับ {defense.level} · {defense.levelTag}</b>
+              {defense.weightedBeta!=null&&<span className="cc-dim" style={{fontSize:12}}>· weighted β ≈ {defense.weightedBeta}</span>}
+              <a className="cc-conv" style={{textDecoration:"none",marginLeft:"auto",fontSize:11}} href="/defense" target="_blank" rel="noopener noreferrer">ดูเต็ม →</a>
+            </div>
+            {defense.triggers&&defense.triggers.length>0
+              ? <div style={{fontSize:12.5,marginTop:5,color:"#fca5a5"}}>🚨 {defense.triggers.join(" · ")}</div>
+              : <div style={{fontSize:12.5,marginTop:5,color:"#22c55e"}}>ไม่มี trigger ตลาดเปิด{defense.headroom&&defense.headroom.length?" — "+defense.headroom.join(" · "):""}</div>}
+            <div style={{fontSize:12.5,marginTop:5}}>📌 {defense.action}</div>
+            {trim.length>0&&<div style={{fontSize:12,marginTop:5,color:"var(--dim)"}}>✂️ trim ก่อน: {trim.map(p=>p.symbol+" −"+p.trimPct+"% (β"+(p.beta!=null?p.beta:"—")+")").join(" · ")} · ได้เงินสด ~${Number(defense.totalFreed||0).toLocaleString()}</div>}
+          </div>
+        );
+      })()}
       <div className="cc-actions">
         <div className="cc-box">
           <div className="cc-box-h" style={{color:"var(--up)"}}>🟢 น่าซื้อ ({buys.length})</div>
@@ -546,6 +619,26 @@ function CommandCenter({decide,posWatch,perf,tstats,onPick,decideLoading}){
           </React.Fragment>}
         </div>
       </div>
+      {scenario&&scenario.scenarios&&(
+        <div style={{margin:"10px 0",border:"1px solid var(--line)",borderRadius:10,padding:"10px 13px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <b style={{fontSize:14}}>🎲 จำลองพอร์ต (Fed scenario)</b>
+            <span className="cc-dim" style={{fontSize:12,marginLeft:"auto"}}>Expected ≈ <b style={{color:(scenario.expectedReturnPct||0)>=0?"var(--up)":"var(--down)"}}>{(scenario.expectedReturnPct>=0?"+":"")+scenario.expectedReturnPct}%</b></span>
+          </div>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:7}}>
+            {scenario.scenarios.map(s=>{
+              const col=(s.portReturnPct||0)>=0?"var(--up)":"var(--down)";
+              return <div key={s.key} style={{flex:"1 1 120px",border:"1px solid var(--line)",borderRadius:8,padding:"7px 9px"}}>
+                <div style={{fontSize:11,color:"var(--dim)"}}>{s.label}</div>
+                <div style={{fontSize:16,fontWeight:700,color:col}}>{((s.portReturnPct||0)>=0?"+":"")+s.portReturnPct}%</div>
+                <div style={{fontSize:11,color:"var(--dim)"}}>โอกาส {s.prob}%</div>
+              </div>;
+            })}
+          </div>
+          <div style={{fontSize:11,color:"var(--dim)",marginTop:6}}>⚠️ โอกาส%เป็นค่าสมมติตาม regime · ผลอิง beta ประมาณ — ใช้ชี้ทิศทาง/ขนาดเสี่ยงสัมพัทธ์ ไม่ใช่พยากรณ์ราคา</div>
+        </div>
+      )}
+      <AllocCard/>
       {/* Edge — ปิด loop: ระบบนี้แม่นจริงไหม (paper = ชนะ SPX, real = เทรดจริง) */}
       {(()=>{
         const buy10=perf&&perf.horizons&&perf.horizons["10"]&&perf.horizons["10"].BUY;
@@ -646,6 +739,8 @@ function App(){
   const [tstats,setTstats] = useState(null);   // /api/trade-stats — สถิติเทรดจริง (win rate, R, PnL)
   const [mkt,setMkt] = useState(()=>usMarketStatus());  // สถานะตลาดสหรัฐ (เปิด/ปิด)
   const [decideLoading,setDecideLoading] = useState(false);
+  const [defense,setDefense] = useState(null);   // /api/defense — M36 Portfolio Defense (deterministic)
+  const [scenario,setScenario] = useState(null); // /api/scenario — M38 Portfolio Scenario (deterministic)
   const [riskConfig,setRiskConfig] = useState(null);  // เงินทุน+%เสี่ยง (สำหรับ Heat/sizing) — /api/riskconfig
   const [alertCfg,setAlertCfg] = useServerLS("alertCfg",DEFAULT_ALERTS,"/api/alerts");  // สวิตช์ Telegram alerts — ซิงค์ข้ามเครื่อง (alerts worker ใช้ค่าจากที่นี่ทีหลังก็ได้)
   function toggleAlert(key,val){ setAlertCfg(prev=>({...prev,[key]:val})); }
@@ -659,6 +754,11 @@ function App(){
   const [sortBy,setSortBy] = useState("default");        // เรียง watchlist
   const [filt,setFilt] = useState("all");                // กรอง watchlist: ทั้งหมด/ขึ้น/ลง
   const [wlQuery,setWlQuery] = useState("");             // ค้นหาหุ้นใน watchlist (substring symbol)
+  const [wlView,setWlView] = useLS("wlView","table");    // มุมมอง watchlist: ตาราง/การ์ด (จำไว้ใน localStorage)
+  const [wide,setWide] = useState(()=>typeof window!=="undefined"&&window.matchMedia("(min-width:1080px)").matches); // จอกว้างพอทำ master-detail (พาเนลขวา) ไหม
+  useEffect(()=>{ const mq=window.matchMedia("(min-width:1080px)"); const h=e=>setWide(e.matches);
+    mq.addEventListener?mq.addEventListener("change",h):mq.addListener(h);
+    return ()=>{ mq.removeEventListener?mq.removeEventListener("change",h):mq.removeListener(h); }; },[]);
   useEffect(()=>{ document.documentElement.setAttribute("data-theme",theme); },[theme]);
 
   const symbols = useMemo(()=>{
@@ -694,6 +794,8 @@ function App(){
         fetch("/api/positions-watch",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(d=>{ if(d&&d.ok) setPosWatch(d); }),
         fetch("/api/performance",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(d=>{ if(d&&d.ok) setPerf(d); }),
         fetch("/api/trade-stats",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(d=>{ if(d&&d.ok) setTstats(d); }),
+        fetch("/api/defense",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(d=>{ if(d&&!d.error) setDefense(d); }),
+        fetch("/api/scenario",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(d=>{ if(d&&d.ok) setScenario(d); }),
       ]);
     }catch(e){}finally{ setDecideLoading(false); }
   },[]);
@@ -815,7 +917,7 @@ function App(){
     // signal/conviction จาก worker (/api/decide) = source เดียว · fallback signalOf client ถ้า worker ยังไม่มีตัวนั้น
     const sigBySym={};
     const cands=(decide&&[...(decide.candidates||[]),...(decide.core||[])])||[];
-    cands.forEach(c=>{ if(c&&c.symbol) sigBySym[c.symbol.toUpperCase()]={signal:c.signal,conviction:c.conviction,stance:c.stance}; });
+    cands.forEach(c=>{ if(c&&c.symbol) sigBySym[c.symbol.toUpperCase()]={signal:c.signal,conviction:c.conviction,stance:c.stance,dims:c.dims,wreason:c.reason,changePct:c.changePct}; });
     // %เปลี่ยนของ S&P500 วันนี้ (จาก ^GSPC ที่ refresh ดึงมา) — ฐานคำนวณ RS ของทุกหุ้น
     let spxChg=null;
     const spx=live["^GSPC"];
@@ -861,9 +963,16 @@ function App(){
       const localSig=signalOf(ind);
       const ws=sigBySym[sym.toUpperCase()];
       const sig = (ws&&ws.signal)
-        ? {label:ws.signal,cls:(ws.signal||"hold").toLowerCase(),reasons:localSig.reasons,score:localSig.score}
-        : {label:"—",cls:"na",reasons:localSig.reasons,score:localSig.score};
-      out[sym]={price,chg,chgPct,closes,ohlc:l&&l.ohlc,ind,sig,conviction:(ws?ws.conviction:null),stance:(ws?ws.stance:null),ok:l?l.ok!==false:false,name:l&&l.name,extra,currency:(l&&l.currency)||"USD"};
+        ? {label:ws.signal,cls:(ws.signal||"hold").toLowerCase(),reasons:localSig.reasons,score:localSig.score,dims:ws.dims,wreason:ws.wreason}
+        : {label:"—",cls:"na",reasons:localSig.reasons,score:localSig.score,dims:ws&&ws.dims,wreason:ws&&ws.wreason};
+      // %เปลี่ยนวันนี้ = ใช้ค่าจาก worker (/api/decide) เป็น source เดียวถ้ามี — กัน client cache (live ใน localStorage) ค้างแล้วโชว์ % เพี้ยน (เช่น CRWV +9.67% ค้าง ทั้งที่จริง +0.77%)
+      let dayChg=chg, dayChgPct=chgPct;
+      if(ws && ws.changePct!=null && price!=null){
+        dayChgPct = ws.changePct;
+        const pc = price/(1+ws.changePct/100);   // ฐานเทียบที่ implied จาก % ของ worker → chg สัมบูรณ์สอดคล้องกัน (ใช้ใน day P/L พอร์ต)
+        dayChg = (isFinite(pc) && pc>0) ? price - pc : chg;
+      }
+      out[sym]={price,chg:dayChg,chgPct:dayChgPct,closes,ohlc:l&&l.ohlc,ind,sig,conviction:(ws?ws.conviction:null),stance:(ws?ws.stance:null),ok:l?l.ok!==false:false,name:l&&l.name,extra,currency:(l&&l.currency)||"USD"};
     }
     return out;
   },[symbols,live,decide]);
@@ -899,6 +1008,16 @@ function App(){
     return {up,down,best,worst};
   },[watch,data]);
 
+  // ข้อมูลต่อแถว (ใช้ร่วมกันทั้งมุมมองตาราง + การ์ด ให้ logic ตรงกันเสมอ)
+  const rowInfo = w=>{
+    const d=data[w.symbol]||{};
+    const ind=d.ind, sig=d.sig||{label:"—",cls:"na"};
+    const rsiVal=ind&&ind.rsi;
+    const rsiCol = rsiVal==null?"#646b7a": rsiVal>70?"#f87171": rsiVal<35?"#4ade80":"#9aa3b2";
+    const isNew = d.price!=null && !ind;   // มีราคาแล้วแต่ข้อมูลย้อนหลังไม่พอ → หุ้นเพิ่งเข้าตลาด
+    return {d,ind,sig,rsiVal,rsiCol,isNew};
+  };
+
   // watchlist ที่กรอง+เรียงแล้ว (ไม่แตะ watch จริง — แค่ลำดับการแสดงผล)
   const shownWatch = useMemo(()=>{
     let arr=[...watch];
@@ -912,7 +1031,10 @@ function App(){
     else if(sortBy==="rsiLow")arr.sort((a,b)=>n(g(a).rsi,999)-n(g(b).rsi,999));
     else if(sortBy==="sig")   arr.sort((a,b)=>n(g(b).sig,-99)-n(g(a).sig,-99));
     else if(sortBy==="az")    arr.sort((a,b)=>a.symbol.localeCompare(b.symbol));
-    return arr;
+    // หุ้นที่มีราคาแล้วแต่ข้อมูลย้อนหลังไม่พอ (หุ้นเพิ่งเข้าตลาด) → ดันไปล่างสุดเสมอ ไม่ให้แถว "—" คั่นกลาง
+    const ready=[],late=[];
+    for(const w of arr){ const d=data[w.symbol]; (d&&d.price!=null&&!d.ind)?late.push(w):ready.push(w); }
+    return [...ready,...late];
   },[watch,data,sortBy,filt,wlQuery]);
 
   async function addSymbol(){
@@ -962,7 +1084,7 @@ function App(){
 
 
   return (
-    <div className="wrap">
+    <div className={"wrap"+(detail&&wide?" dock-open":"")}>
       <div className="topbar">
         <div className="brand">
           <div className="mark">📈</div>
@@ -985,7 +1107,7 @@ function App(){
 
 
       {/* Command Center — decision-first */}
-      <CommandCenter decide={decide} posWatch={posWatch} perf={perf} tstats={tstats} onPick={setDetail} decideLoading={decideLoading}/>
+      <CommandCenter decide={decide} posWatch={posWatch} perf={perf} tstats={tstats} defense={defense} scenario={scenario} onPick={setDetail} decideLoading={decideLoading}/>
 
       {/* เตือนระหว่างเรตแลกเงินยังโหลดไม่เสร็จ — พอร์ตอาจปนสกุลชั่วคราว */}
       {port.fxMissing.length>0 && (
@@ -1041,9 +1163,13 @@ function App(){
             <option value="sig">สัญญาณ (ซื้อก่อน)</option>
             <option value="az">ชื่อ A → Z</option>
           </select>
+          <div className="seg" title="สลับมุมมอง ตาราง / การ์ด">
+            <button className={wlView==="table"?"on":""} onClick={()=>setWlView("table")}>▤ ตาราง</button>
+            <button className={wlView==="card"?"on":""} onClick={()=>setWlView("card")}>▦ การ์ด</button>
+          </div>
           <span className="wl-count">{shownWatch.length}/{watch.length} ตัว</span>
         </div>
-        <div style={{overflowX:"auto"}}>
+        {wlView==="table" && <div style={{overflowX:"auto"}}>
         <table>
           <thead><tr>
             <th>หุ้น</th><th className="num">ราคา</th><th className="num">เปลี่ยน</th>
@@ -1052,12 +1178,9 @@ function App(){
           </tr></thead>
           <tbody>
             {shownWatch.map(w=>{
-              const d=data[w.symbol]||{};
-              const ind=d.ind, sig=d.sig||{label:"—",cls:"na"};
-              const rsiVal=ind&&ind.rsi;
-              const rsiCol = rsiVal==null?"#646b7a": rsiVal>70?"#f87171": rsiVal<35?"#4ade80":"#9aa3b2";
+              const {d,sig,rsiVal,rsiCol,isNew}=rowInfo(w);
               return (
-                <tr key={w.symbol} className="click" onClick={()=>setDetail(w.symbol)}>
+                <tr key={w.symbol} className={"click"+(isNew?" row-new":"")+(detail===w.symbol?" sel":"")} onClick={()=>setDetail(w.symbol)}>
                   <td><span className="sym">{w.symbol}</span></td>
                   <td className="num mono">
                     {d.price!=null?fmt(d.price):"—"}
@@ -1066,11 +1189,11 @@ function App(){
                     </div>}
                   </td>
                   <td className={"num mono "+(d.chgPct>=0?"up":"down")}>{d.chgPct!=null?(d.chgPct>=0?"▲ +":"▼ −")+fmt(Math.abs(d.chgPct))+"%":"—"}</td>
-                  <td className="num hide-sm">{rsiVal!=null?<span className="rsi-b mono" style={{color:rsiCol,background:rsiCol+"18"}}>{rsiVal.toFixed(0)}</span>:"—"}</td>
-                  <td className="hide-sm"><Spark data={d.closes} color={d.chgPct>=0?"#4ade80":"#f87171"}/></td>
-                  <td><span className={"pill "+sig.cls}>{sig.label}</span>{d.conviction!=null&&<div className="cc-conv" style={{marginTop:4}}>conv {d.conviction}</div>}</td>
+                  <td className="num hide-sm">{rsiVal!=null?<span className="rsi-b mono" style={{color:rsiCol,background:rsiCol+"18"}}>{rsiVal.toFixed(0)}</span>:<span style={{color:"var(--dim)"}}>{isNew?"·":"—"}</span>}</td>
+                  <td className="hide-sm">{isNew?<span className="spark-na" title="ยังไม่มีราคาปิดสะสมพอวาดกราฟ — หุ้นเพิ่งเข้าตลาด">รอข้อมูล</span>:<Spark data={d.closes} color={d.chgPct>=0?"#4ade80":"#f87171"}/>}</td>
+                  <td>{isNew?<span className="pill new" title="ข้อมูลย้อนหลังไม่พอคำนวณอินดิเคเตอร์ (ต้องการ ~15 วันทำการ) — มักเป็นหุ้นเพิ่งเข้าตลาด เดี๋ยวครบแล้วขึ้นเอง">🆕 หุ้นใหม่</span>:<React.Fragment><span className={"pill "+sig.cls}>{sig.label}</span>{d.conviction!=null&&<div className="cc-conv" style={{marginTop:4}}>conv {d.conviction}</div>}</React.Fragment>}</td>
                   <td className="num mono hide-sm" style={{color:"var(--muted)",fontSize:12.5}}>
-                    {(w.entry||w.sl||w.tp)? `${fmt(w.entry)}/${fmt(w.sl)}/${fmt(w.tp)}` : <span style={{color:"var(--dim)"}}>—</span>}
+                    {(w.entry||w.sl||w.tp)? `${fmt(w.entry)}/${fmt(w.sl)}/${fmt(w.tp)}` : <span style={{color:"var(--dim)",opacity:.5,fontWeight:400}} title="ยังไม่ได้ตั้งแผน — กดที่แถวเพื่อตั้ง หรือ ✨ คำนวณแผนทั้งหมด">ตั้งแผน</span>}
                   </td>
                   <td className="num" onClick={e=>e.stopPropagation()}>
                     <button className="btn danger sm" onClick={()=>removeSym(w.symbol)}>✕</button>
@@ -1080,7 +1203,45 @@ function App(){
             })}
           </tbody>
         </table>
-        </div>
+        </div>}
+        {wlView==="card" && <div className="wl-cards">
+          {shownWatch.map(w=>{
+            const {d,sig,rsiVal,rsiCol,isNew}=rowInfo(w);
+            const hasPlan = w.entry||w.sl||w.tp;
+            return (
+              <div key={w.symbol} className={"wl-card click"+(isNew?" row-new":"")+(detail===w.symbol?" sel":"")} onClick={()=>setDetail(w.symbol)}>
+                <div className="wl-card-top">
+                  <span className="sym" style={{fontSize:16}}>{w.symbol}</span>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    {isNew
+                      ? <span className="pill new" title="ข้อมูลย้อนหลังไม่พอคำนวณอินดิเคเตอร์ (~15 วันทำการ) — มักเป็นหุ้นเพิ่งเข้าตลาด">🆕 หุ้นใหม่</span>
+                      : <span className={"pill "+sig.cls}>{sig.label}</span>}
+                    <button className="btn danger sm" onClick={e=>{e.stopPropagation();removeSym(w.symbol);}}>✕</button>
+                  </div>
+                </div>
+                <div className="wl-card-px">
+                  <span className="mono" style={{fontSize:20,fontWeight:700}}>{d.price!=null?fmt(d.price):"—"}</span>
+                  <span className={"mono "+(d.chgPct>=0?"up":"down")} style={{fontWeight:700}}>{d.chgPct!=null?(d.chgPct>=0?"▲ +":"▼ −")+fmt(Math.abs(d.chgPct))+"%":"—"}</span>
+                  {d.extra && <span className={"ah "+(d.extra.chg>=0?"up":"down")}>{d.extra.type==="pre"?"pre ":"post "}{fmt(d.extra.price)}</span>}
+                </div>
+                <div className="wl-card-spark">
+                  {isNew
+                    ? <span className="spark-na" title="ยังไม่มีราคาปิดสะสมพอวาดกราฟ — หุ้นเพิ่งเข้าตลาด">รอข้อมูล</span>
+                    : <Spark data={d.closes} color={d.chgPct>=0?"#4ade80":"#f87171"} full/>}
+                </div>
+                <div className="wl-card-foot">
+                  {rsiVal!=null
+                    ? <span className="rsi-b mono" style={{color:rsiCol,background:rsiCol+"18"}} title="RSI 14">{rsiVal.toFixed(0)}</span>
+                    : <span style={{color:"var(--dim)",fontSize:12}}>RSI —</span>}
+                  {d.conviction!=null && <span className="cc-conv">conv {d.conviction}</span>}
+                  {hasPlan
+                    ? <span className="mono" style={{marginLeft:"auto",fontSize:11.5,color:"var(--muted)"}} title="Entry / SL / TP">{fmt(w.entry)}/{fmt(w.sl)}/{fmt(w.tp)}</span>
+                    : <span style={{marginLeft:"auto",fontSize:11,color:"var(--dim)",opacity:.6}}>ยังไม่ตั้งแผน</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>}
         {watch.length===0 && <div className="empty">ยังไม่มีหุ้นใน watchlist — เพิ่มด้านบน</div>}
         {watch.length>0 && shownWatch.length===0 && <div className="empty">ไม่มีหุ้นตรงตามตัวกรอง — ลองเปลี่ยนเป็น "ทั้งหมด"</div>}
       </div>
@@ -1111,7 +1272,7 @@ function App(){
       </div>
 
       {detail && <DetailModal w={watch.find(x=>x.symbol===detail) || {symbol:detail,entry:0,sl:0,tp:0,note:""}} d={data[detail]} onClose={()=>setDetail(null)}
-                   alertCfg={alertCfg} toggleEma={toggleEma}
+                   alertCfg={alertCfg} toggleEma={toggleEma} docked={wide}
                    onSave={patch=>{updateWatch(detail,patch);}} onAddPos={(p)=>setPositions([...positions,p])}/>}
       {showSet && <SettingsModal webhook={webhook} setWebhook={setWebhook} autoSec={autoSec} setAutoSec={setAutoSec}
                    onClose={()=>setShowSet(false)} onTest={refresh}
@@ -1121,12 +1282,28 @@ function App(){
 }
 
 /* ---------- sparkline ---------- */
-function Spark({data,color="#60a5fa",w=92,h=30}){
+let _sparkId=0;
+function Spark({data,color="#60a5fa",w=92,h=30,full=false}){
   if(!data||data.length<3) return <span style={{color:"var(--dim)"}}>—</span>;
+  if(full){ w=240; h=46; }
   const d=data.slice(-60);
   const min=Math.min(...d),max=Math.max(...d),rng=(max-min)||1;
-  const pts=d.map((v,i)=>`${(i/(d.length-1))*w},${h-((v-min)/rng)*(h-4)-2}`).join(" ");
-  return <svg width={w} height={h} style={{display:"block"}}><polyline points={pts} fill="none" stroke={color} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round"/></svg>;
+  const line=d.map((v,i)=>`${(i/(d.length-1))*w},${h-((v-min)/rng)*(h-5)-3}`).join(" ");
+  const area=`0,${h} `+line+` ${w},${h}`;
+  const first=d[0],last=d[d.length-1], pct=first?((last-first)/first*100):0;
+  const gid="sg"+(_sparkId++);   // counter เดินหน้า → id ไม่ชนกัน (เลี่ยง Math.random ที่อาจซ้ำ)
+  const svgProps = full
+    ? {viewBox:`0 0 ${w} ${h}`,preserveAspectRatio:"none",style:{display:"block",width:"100%",height:h}}
+    : {width:w,height:h,style:{display:"block"}};
+  return <svg {...svgProps}>
+    <title>{`60 วันล่าสุด · ${min.toFixed(2)}–${max.toFixed(2)} (${pct>=0?"+":""}${pct.toFixed(1)}%)`}</title>
+    <defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor={color} stopOpacity="0.26"/>
+      <stop offset="100%" stopColor={color} stopOpacity="0"/>
+    </linearGradient></defs>
+    <polygon points={area} fill={`url(#${gid})`}/>
+    <polyline points={line} fill="none" stroke={color} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"/>
+  </svg>;
 }
 
 /* ---------- toggle switch ---------- */
@@ -1237,6 +1414,16 @@ function EmaChart({closes, ohlc, show, w=560, h=240}){
 }
 
 /* ---------- positions ---------- */
+// ช่องตัวเลขแก้ได้ — โชว์เลขปัด (maxdec) ตอนไม่โฟกัส, เต็มความละเอียดตอนแก้ (ไม่ทำลายค่าจริง เช่น 4.1272001 หุ้น)
+function NumCell({value,onCommit,width=96,maxdec=4}){
+  const [foc,setFoc]=useState(false);
+  const [raw,setRaw]=useState("");
+  const disp = foc ? raw : (value!=null&&value!==""? Number(value).toLocaleString("en-US",{useGrouping:false,maximumFractionDigits:maxdec}) : "");
+  return <input className="inp mono" type="number" style={{padding:"4px 6px",fontSize:13,height:30,width,textAlign:"right"}} value={disp}
+    onFocus={()=>{ setRaw(value!=null?String(value):""); setFoc(true); }}
+    onChange={e=>{ setRaw(e.target.value); onCommit(+e.target.value); }}
+    onBlur={()=>setFoc(false)}/>;
+}
 function Positions({positions,setPositions,updatePos,data,watch,posWatch,fx}){
   const [add,setAdd]=useState(false);
   const [pick,setPick]=useState(false);
@@ -1306,8 +1493,7 @@ function Positions({positions,setPositions,updatePos,data,watch,posWatch,fx}){
                   <td><input className="inp mono" style={{...cell,width:84,textTransform:"uppercase"}} value={p.symbol}
                        onChange={e=>updatePos(p.id,{symbol:e.target.value.toUpperCase()})} title="แก้ชื่อหุ้นได้ตรงนี้"/>
                        {curOf(p.symbol)!=="USD"&&<span style={{fontSize:9.5,fontWeight:700,color:"var(--dim)",marginLeft:5,whiteSpace:"nowrap"}} title={"ราคาเป็น "+curOf(p.symbol)+" · แปลงเป็น USD ในมูลค่า/กำไร"}>{curOf(p.symbol)}→$</span>}</td>
-                  <td className="num"><input className="inp mono" type="number" style={{...cell,width:96,textAlign:"right"}} value={p.qty||""}
-                       onChange={e=>updatePos(p.id,{qty:+e.target.value})}/></td>
+                  <td className="num"><NumCell value={p.qty} width={96} onCommit={v=>updatePos(p.id,{qty:v})}/></td>
                   <td className="num"><input className="inp mono" type="number" style={{...cell,width:96,textAlign:"right"}} value={p.cost||""}
                        onChange={e=>updatePos(p.id,{cost:+e.target.value})}/></td>
                   <td className="num mono">{px!=null?fmt(px):"—"}</td>
@@ -1461,7 +1647,7 @@ function ProPlan({ind}){
 }
 
 /* ---------- detail modal ---------- */
-function DetailModal({w,d,onClose,onSave,onAddPos,alertCfg,toggleEma}){
+function DetailModal({w,d,onClose,onSave,onAddPos,alertCfg,toggleEma,docked}){
   const ind=d&&d.ind, sig=(d&&d.sig)||{label:"—",cls:"na",reasons:[]};
   const emaShow=(alertCfg&&alertCfg.ema)||{};
   const [entry,setEntry]=useState(w.entry||"");
@@ -1472,8 +1658,8 @@ function DetailModal({w,d,onClose,onSave,onAddPos,alertCfg,toggleEma}){
   function save(){ onSave({entry:+entry||0,sl:+sl||0,tp:+tp||0,note}); onClose(); }
   const rr = (entry&&sl&&tp)&&(entry-sl)>0 ? ((tp-entry)/(entry-sl)).toFixed(2) : null;
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className={docked?"dock-wrap":"overlay"} onClick={docked?null:onClose}>
+      <div className={docked?"dock":"modal"} onClick={e=>e.stopPropagation()}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
           <div><h3 className="head-font">{w.symbol} <span className={"pill "+sig.cls}>{sig.label}</span>{d&&d.conviction!=null&&<span className="cc-conv" style={{marginLeft:6}}>conv {d.conviction}</span>}</h3>
             <div className="msub">{d&&d.name?d.name:""} {d&&d.price!=null?" · $"+fmt(d.price):""} {d&&d.chgPct!=null?<span className={d.chgPct>=0?"up":"down"}> ({d.chgPct>=0?"+":""}{fmt(d.chgPct)}%)</span>:""}
@@ -1482,6 +1668,7 @@ function DetailModal({w,d,onClose,onSave,onAddPos,alertCfg,toggleEma}){
           <div style={{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"flex-end"}}>
             <a className="btn sm ghost" href={"https://finance.yahoo.com/quote/"+encodeURIComponent(w.symbol)} target="_blank" rel="noopener noreferrer" style={{whiteSpace:"nowrap"}} title={"เปิดกราฟ/ข่าวเต็มของ "+w.symbol+" ที่ Yahoo Finance"}>📈 กราฟเต็ม</a>
             <a className="btn sm ghost" href="/thesis" target="_blank" rel="noopener noreferrer" style={{whiteSpace:"nowrap"}} title={"ดูบทวิเคราะห์ LLM ทุกตัว (รวม "+w.symbol+")"}>🧠 Thesis AI</a>
+            {docked && <button className="btn sm ghost" onClick={onClose} title="ปิดพาเนล" aria-label="ปิดพาเนล" style={{lineHeight:1}}>✕</button>}
           </div>
         </div>
 
@@ -1494,7 +1681,7 @@ function DetailModal({w,d,onClose,onSave,onAddPos,alertCfg,toggleEma}){
                 color:on?dd.c:"var(--dim)"}}>● {dd.label}</button>
           );})}
         </div>
-        <div style={{margin:"2px 0 14px"}}><EmaChart closes={d&&d.closes} ohlc={d&&d.ohlc} show={emaShow} w={560} h={230}/></div>
+        <div style={{margin:"2px 0 14px"}}><EmaChart closes={d&&d.closes} ohlc={d&&d.ohlc} show={emaShow} w={docked?430:560} h={230}/></div>
 
         <div className="ind-grid">
           <div className="ind"><div className="l">RSI (14)</div><div className="v mono">{ind&&ind.rsi!=null?ind.rsi.toFixed(1):"—"}</div></div>
@@ -1507,8 +1694,19 @@ function DetailModal({w,d,onClose,onSave,onAddPos,alertCfg,toggleEma}){
           <div className="ind"><div className="l">ROC (10 ว.)</div><div className="v mono">{ind&&ind.roc!=null?(ind.roc>=0?"+":"")+ind.roc.toFixed(1)+"%":"—"}</div></div>
         </div>
 
+        {sig.dims && <div style={{margin:"12px 0 6px"}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:7}}>conviction 5 มิติ <span style={{fontWeight:400,fontSize:11.5,color:"var(--dim)"}}>(regime-weighted — โมเดลจริงที่ออกป้าย)</span>
+            {sig.wreason&&<div style={{fontWeight:400,fontSize:12,color:"var(--muted)",marginTop:3}}>→ {sig.wreason}</div>}</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+            {[["เทรนด์","trend"],["โมเมนตัม","momentum"],["กลับตัว","meanRev"],["เงินไหล","moneyFlow"],["แรงเทียบตลาด","relStrength"]].map(([lab,k])=>{
+              const v=sig.dims[k]; if(v==null) return null;
+              const col=v>0.05?"#4ade80":v<-0.05?"#f87171":"#9aa3b2";
+              return <span key={k} style={{fontSize:11.5,fontWeight:600,padding:"3px 9px",borderRadius:8,border:"1px solid "+col+"44",background:col+"14",color:col}}>{lab} {v>0.05?"▲":v<-0.05?"▼":"•"}</span>;
+            })}
+          </div>
+        </div>}
         {sig.reasons&&sig.reasons.length>0 &&
-          <div className="reason"><b>เหตุผลสัญญาณ:</b><ul>{sig.reasons.map((r,i)=><li key={i}>{r}</li>)}</ul></div>}
+          <div className="reason"><b>อินดิเคเตอร์ดิบ (อ้างอิง):</b><ul>{sig.reasons.map((r,i)=><li key={i}>{r}</li>)}</ul></div>}
 
         <ProPlan ind={ind}/>
 

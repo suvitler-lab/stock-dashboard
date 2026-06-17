@@ -20,6 +20,10 @@ database_name = "stock-journal"
 database_id = "507e1012-d2f9-43d7-882c-24b2515268dc"
 
 # Cron - (1) คำนวณ signal เขียนลง KV ทุก 15 นาที (single source)
-#        (2) snapshot ลง D1 ทุกวัน 22:00 UTC = 05:00 น.ไทย (หลังตลาด US ปิด)
+#        (2) snapshot ลง D1 ทุกวัน 22:00 UTC = 05:00 น.ไทย (หลังตลาด US ปิด) + heartbeat
+#        (3) backup journal เป็น CSV เข้า Telegram ทุกเสาร์ 23:00 UTC = 06:00 น.อาทิตย์ไทย
 [triggers]
-crons = ["*/15 * * * *", "0 22 * * 1-5"]
+crons = ["*/15 * * * *", "0 22 * * 1-5", "0 23 * * 6"]
+
+
+

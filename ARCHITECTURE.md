@@ -1,6 +1,6 @@
 # สถาปัตยกรรมระบบตัดสินใจลงทุน (Investment Decision System)
 
-> **สถานะ (มิ.ย. 2026): Phase 0–4 + critique นักลงทุนระดับโลก 5 หมวด เสร็จและ deploy แล้ว**
+> **สถานะ (มิ.ย. 2026): Phase 0–5 + critique นักลงทุนระดับโลก 5 หมวด เสร็จและ deploy แล้ว** (Phase 5 = CIO Layer พอร์ตระดับ · deterministic)
 > Endpoints: `/decide` `/thesis` `/performance` `/positions` `/api/surprise` · catalyst/heat/position-tracking ครบ · cache fullData ลด /decide เหลือ ~วินาที
 > **ยกระดับ 5 หมวด (signal/วัดผล/ความเสี่ยง/พื้นฐาน/regime) → ดู [REVIEW.md](REVIEW.md)** (critique→สถานะ→โค้ด→วิธี verify)
 > conviction engine: 5 มิติ regime-weighted · ป้าย=conviction (เลิก signalOf) · RS 3 เดือน · sizing หัก corr/kill-switch/event · regime + credit/breadth · fundamentals flag
@@ -118,6 +118,13 @@ outcome_summary(
 6. **Playbook Match** — เทียบกับกฎที่ตั้งไว้ตอนหัวเย็น → เด้งเฉพาะเมื่อเงื่อนไขครบ (กัน FOMO)
 7. **Surprise Detector** — flag เฉพาะเมื่อ regime เปลี่ยนจริง: CMF พลิกขั้ว, RS เปลี่ยนข้าง, volume spike, correlation พุ่ง
 
+**CIO Layer — พอร์ตระดับ (Phase 5 · เพิ่ม มิ.ย. 2026 · deterministic ทั้งหมด ไม่เรียก LLM):**
+ยกระดับจาก "วิเคราะห์รายหุ้น" → "ตัดสินใจระดับพอร์ต" — เลขมาจากสูตร/ข้อมูลจริง ไม่ให้ LLM เดา (กัน false precision) · ทุก output มี `assumptions[]` กำกับ · pure functions (`defenseAssess`/`allocationRank`/`scenarioOutcome`) มี unit test ใน `test/cio.test.js`
+8. **M36 Portfolio Defense / Kill Switch** (`/api/defense` + `/defense` HTML) — นับ trigger จาก regime (NDX/SPX < EMA200, VIX > 25/35, HYG credit, RSP breadth) → ระดับ 0-3 + trim tactical beta สูงก่อน เก็บ core/anchor · VIX > 35 บังคับ L3 · **แยกจาก kill-switch เดิม** (อันนั้นนับ loss streak จาก trade_log — คนละเรื่อง)
+9. **M37 Capital Allocation Ranking** (`/api/allocate?budget=`) — "เงินใหม่ใส่ตัวไหนก่อน": เรียง conviction จริง · ตัด overweight ≥15% (แม้คะแนนดี) · เช็ค entry zone + earnings → แบ่งงบ ที่เหลือเข้า cash
+10. **M38 Portfolio Scenario** (`/api/scenario`) — Fed dovish/neutral/hawkish · prob default ตาม regime (override `?dovish=&neutral=&hawkish=`) · ผลพอร์ต = Σ(weight × beta × marketMove สมมติ) · expected = Σ(prob × ผลฉาก)
+- UI = การ์ดใน CommandCenter (dashboard) · เชื่อมเข้า skill ทั้ง 2 (Claude fetch endpoint, Gemini คำนวณจาก Sheet)
+
 ### ชั้น 4 — JUDGMENT (LLM · ใช้ฟรี tier)
 เรียก LLM **เฉพาะ candidate ที่ผ่าน gate แล้ว** (ปกติ 2-5 ตัว/วัน ไม่ใช่ 21) → ประหยัด token มหาศาล
 
@@ -176,7 +183,8 @@ outcome_summary(
 | **2** | Decision Engine (regime/conviction/sizing/risk gate) + `riskConfig` → `/decide` | เปลี่ยน vibes เป็นกระบวนการ | กลาง-สูง |
 | **3** | Playbook + Surprise Detector → Telegram อัจฉริยะ | กัน FOMO + เลิก alert fatigue | ต่ำ-กลาง |
 | **4** | LLM Judgment layer (schema-bound) + Calibration | ความเห็นที่วัดความแม่นได้ | กลาง |
-| **5** | (ทางเลือก) Multi-agent debate | ROI ต่ำสุด ทำท้ายสุด | สูง |
+| **5** ✅ | **CIO Layer — Defense (M36) / Allocation (M37) / Scenario (M38)** พอร์ตระดับ · deterministic | ยกจาก "รายหุ้น" → "ระดับพอร์ต" โดยไม่เผา quota | กลาง |
+| **6** | (ทางเลือก) Multi-agent debate | ROI ต่ำสุด ทำท้ายสุด | สูง |
 
 **กฎเหล็ก:** ทำ **Phase 0.5 (logging) ก่อนสุด** แม้ส่วนอื่นยังไม่พร้อม — เพราะข้อมูลที่หายไปวันนี้ ย้อนเก็บไม่ได้ · ทุก Phase หลังพึ่ง "ข้อมูลว่าอะไรเวิร์ก" ซึ่งต้องใช้เวลาสะสม
 
@@ -196,4 +204,6 @@ outcome_summary(
 **รอบ 3** — กันกับดักเชิงพอร์ต/การวัดผล 3 จุด: **(8)** แยก Core vs Tactical (กัน "SELL VOO") · **(9)** วัด benchmark-relative + paper ทั้งหมด (กันหลอกตัวเองด้วย hit rate ดิบ) · **(10)** journal backup/export (ข้อมูลย้อนเก็บไม่ได้)
 
 **รอบ 4 (reality-check — ตัดของเพ้อฝัน)** — **(11)** ตัด market breadth (ดึงไม่ได้ที่ 21 หุ้น = ผิดเทคนิค) · **(12)** downgrade Brier/calibration → tracking ง่าย ๆ (sample เล็กไม่มีนัยสำคัญหลายเดือน) · **(13)** weight ปรับมือ ไม่ auto-tune (กัน overfit noise) · **(14)** conviction weight คงที่ชุดเดียวก่อน regime แค่ปรับ threshold (อย่าซับซ้อนก่อนจำเป็น)
+
+**รอบ 5 (CIO Layer — ตอบ critique "นักวิเคราะห์ → CIO")** — เพิ่ม Phase 5 พอร์ตระดับ โดยยึดบทเรียน "Daily Portfolio (computed) เก่งกว่า LLM Thesis (เดา)": **(15)** M36/37/38 เป็น **deterministic ไม่เรียก Gemini** (เลี่ยง false precision + ไม่เผา quota 20 req/วัน) · **(16)** ยุบ "Opportunity Cost + Capital Allocation Master" ของ critique เป็น M37 ตัวเดียว (เลี่ยงของซ้ำ) · **(17)** Portfolio Impact = อัปเกรด M30 เดิม ไม่สร้าง module ใหม่ · **(18)** ทุกเลขประมาณ (beta/prob/marketMove) ต้องส่ง `assumptions[]` กำกับ — "ชี้ทิศทาง ไม่ใช่พยากรณ์เป๊ะ"
 > สรุป: คุณค่าจริง = **วินัย + ความจำ + กระบวนการคงเส้นคงวา** ไม่ใช่ ML ปรับตัวเอง · ทุกชิ้นในแผน ship ได้จริงด้วยข้อมูล/เครื่องมือที่มีอยู่
