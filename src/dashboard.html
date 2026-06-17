@@ -529,7 +529,7 @@ function AllocCard(){
 }
 
 /* ---------- Command Center — decision-first (ดึงจาก /api/decide + /api/positions-watch) ---------- */
-function CommandCenter({decide,posWatch,perf,tstats,defense,scenario,onPick,decideLoading}){
+function CommandCenter({decide,posWatch,perf,tstats,defense,scenario,consensus,onPick,decideLoading}){
   if(!decide) return <div className="section" style={{textAlign:"center",color:"var(--dim)",padding:"22px"}}>⏳ กำลังโหลดศูนย์บัญชาการ…</div>;
   const rg=decide.regime||{}, heat=decide.heat||{};
   const RG={"risk-on":["เปิดรับความเสี่ยง","🟢","#22c55e"],"risk-off":["เลี่ยงความเสี่ยง","🔴","#ef4444"],"neutral":["เป็นกลาง","🟡","#f59e0b"]};
@@ -589,12 +589,30 @@ function CommandCenter({decide,posWatch,perf,tstats,defense,scenario,onPick,deci
           </div>
         );
       })()}
+      {consensus&&(consensus.conflicts>0||consensus.reviews>0)&&(()=>{
+        const CC=consensus.conflicts>0?"#ef4444":"#f59e0b";
+        return (
+          <div style={{margin:"4px 0 10px",border:"1px solid "+CC,borderLeft:"4px solid "+CC,borderRadius:10,padding:"10px 13px",background:"rgba(255,255,255,0.02)"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <b style={{color:CC,fontSize:15}}>🔍 สัญญาณขัดกัน — ควรรีวิว</b>
+              <span className="cc-dim" style={{fontSize:12}}>· ขัดแรง {consensus.conflicts} · รอตรวจ {consensus.reviews}</span>
+            </div>
+            <div style={{fontSize:11.5,marginTop:4,color:"var(--dim)"}}>เทียบ engine · thesis(AI) · invalidation · defense — จุดที่ไม่ตรงกัน (คลิกดูรายตัว)</div>
+            {consensus.items.slice(0,6).map(i=>(
+              <div key={i.symbol} className="cc-item click" onClick={()=>onPick&&onPick(i.symbol)} title="คลิกดูรายละเอียด">
+                <div className="cc-it-t"><b>{i.symbol}</b> <span style={{fontSize:11,fontWeight:700,color:i.status==="conflict"?"#f87171":"#f59e0b"}}>{i.status==="conflict"?"ขัดแรง":"รอตรวจ"}</span></div>
+                <div className="cc-sub">{i.flags.map(f=>f.msg).join(" · ")}</div>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
       <div className="cc-actions">
         <div className="cc-box">
           <div className="cc-box-h" style={{color:"var(--up)"}}>🟢 น่าซื้อ ({buys.length})</div>
           {buys.length===0?<div className="cc-empty">ไม่มีสัญญาณซื้อที่ผ่านเกณฑ์</div>:
             buys.map(c=>(<div key={c.symbol} className="cc-item click" onClick={()=>onPick&&onPick(c.symbol)} title="คลิกดูรายละเอียด/เพิ่มแผน">
-              <div className="cc-it-t"><b>{c.symbol}</b> <span className="cc-conv">conv {c.conviction}</span>{c.sizing&&c.sizing.sizeFactor!=null&&<span className="cc-tag" title="ไม้ถูกลด (correlation/kill-switch/event)">×{c.sizing.sizeFactor}</span>}{c.earnings&&c.earnings.daysUntil!=null&&c.earnings.daysUntil<=7&&<span className="cc-tag">งบ {c.earnings.daysUntil}ว</span>}</div>
+              <div className="cc-it-t"><b>{c.symbol}</b> <span className="cc-conv">conv {c.conviction}</span>{c.borderline&&<span className="cc-tag" title={"conviction ใกล้เกณฑ์ (ห่าง "+(c.distToFlip!=null?c.distToFlip:"—")+") — ป้ายพลิกง่าย รอยืนยัน"}>⚖️ ก้ำกึ่ง</span>}{c.sizing&&c.sizing.sizeFactor!=null&&<span className="cc-tag" title="ไม้ถูกลด (correlation/kill-switch/event)">×{c.sizing.sizeFactor}</span>}{c.earnings&&c.earnings.daysUntil!=null&&c.earnings.daysUntil<=7&&<span className="cc-tag">งบ {c.earnings.daysUntil}ว</span>}</div>
               <div className="cc-sub">{c.sizing&&c.sizing.shares!=null?(f(c.sizing.shares)+" หุ้น · "+c.sizing.pctOfPort+"% พอร์ต"):("$"+f(c.price))}</div>
               {c.fundFlags&&c.fundFlags.length>0&&<div className="cc-sub" style={{color:"#f59e0b"}}>{c.fundFlags.join(" · ")}</div>}
             </div>))}
@@ -743,6 +761,7 @@ function App(){
   const [decideLoading,setDecideLoading] = useState(false);
   const [defense,setDefense] = useState(null);   // /api/defense — M36 Portfolio Defense (deterministic)
   const [scenario,setScenario] = useState(null); // /api/scenario — M38 Portfolio Scenario (deterministic)
+  const [consensus,setConsensus] = useState(null); // /api/consensus — A2 จับ engine/thesis/invalidation/defense ขัดกัน
   const [riskConfig,setRiskConfig] = useState(null);  // เงินทุน+%เสี่ยง (สำหรับ Heat/sizing) — /api/riskconfig
   const [alertCfg,setAlertCfg] = useServerLS("alertCfg",DEFAULT_ALERTS,"/api/alerts");  // สวิตช์ Telegram alerts — ซิงค์ข้ามเครื่อง (alerts worker ใช้ค่าจากที่นี่ทีหลังก็ได้)
   function toggleAlert(key,val){ setAlertCfg(prev=>({...prev,[key]:val})); }
@@ -798,6 +817,7 @@ function App(){
         fetch("/api/trade-stats",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(d=>{ if(d&&d.ok) setTstats(d); }),
         fetch("/api/defense",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(d=>{ if(d&&!d.error) setDefense(d); }),
         fetch("/api/scenario",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(d=>{ if(d&&d.ok) setScenario(d); }),
+        fetch("/api/consensus",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(d=>{ if(d&&d.ok) setConsensus(d); }),
       ]);
     }catch(e){}finally{ setDecideLoading(false); }
   },[]);
@@ -1109,7 +1129,7 @@ function App(){
 
 
       {/* Command Center — decision-first */}
-      <CommandCenter decide={decide} posWatch={posWatch} perf={perf} tstats={tstats} defense={defense} scenario={scenario} onPick={setDetail} decideLoading={decideLoading}/>
+      <CommandCenter decide={decide} posWatch={posWatch} perf={perf} tstats={tstats} defense={defense} scenario={scenario} consensus={consensus} onPick={setDetail} decideLoading={decideLoading}/>
 
       {/* เตือนระหว่างเรตแลกเงินยังโหลดไม่เสร็จ — พอร์ตอาจปนสกุลชั่วคราว */}
       {port.fxMissing.length>0 && (

@@ -2,7 +2,7 @@
 // เลขพวกนี้ตัดสินใจเรื่องเงิน (defense/allocation/scenario) → กัน regression เงียบ
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defenseAssess, allocationRank, scenarioOutcome, defaultScenarios, invalidationStatus, INVALIDATION_BUFFER_PCT } from '../worker.js';
+import { defenseAssess, allocationRank, scenarioOutcome, defaultScenarios, invalidationStatus, INVALIDATION_BUFFER_PCT, signalStability, reconcile, buyThreshFor } from '../worker.js';
 
 // ============ M36 — defenseAssess ============
 const HEALTHY = { aboveEma200Pct: 3, ndxAboveEma200Pct: 4, vix: 15, creditOk: true, breadthOk: true };
@@ -185,4 +185,70 @@ test('invalidationStatus: ไม่มี invalidation/ราคา = ok (ไม
   assert.equal(invalidationStatus(100, 0).status, 'ok');
   assert.equal(invalidationStatus(100, null).status, 'ok');
   assert.equal(invalidationStatus(0, 100).status, 'ok');
+});
+
+// ============ A1 — signalStability (ป้ายก้ำกึ่ง) ============
+test('signalStability: conviction ใกล้ buyThresh (±4) = borderline', () => {
+  const thr = buyThreshFor('neutral');  // 67
+  assert.equal(signalStability(thr + 1, 'neutral').borderline, true);   // 68 ใกล้เส้น BUY
+  assert.equal(signalStability(thr - 3, 'neutral').borderline, true);   // 64 ใกล้เส้น
+});
+
+test('signalStability: conviction ห่างเกณฑ์ชัด = ไม่ borderline (ป้ายมั่นคง)', () => {
+  assert.equal(signalStability(90, 'neutral').borderline, false);   // BUY ชัด
+  assert.equal(signalStability(50, 'neutral').borderline, false);   // HOLD กลางๆ ห่างทั้ง 67 และ 35
+});
+
+test('signalStability: ใกล้เส้น SELL (35) ก็ borderline', () => {
+  assert.equal(signalStability(37, 'neutral').borderline, true);
+  assert.equal(signalStability(36, 'neutral').nearBoundary, 35);
+});
+
+test('signalStability: score null = ไม่ borderline (ไม่เดา)', () => {
+  assert.equal(signalStability(null, 'neutral').borderline, false);
+});
+
+// ============ A2 — reconcile (Consensus/Conflict Detector) ============
+test('reconcile: ทุกสัญญาณไปทางเดียว = agree', () => {
+  const r = reconcile({ engineStance: 'buy', thesisStance: 'buy', invStatus: 'ok', defenseLevel: 0, borderline: false });
+  assert.equal(r.status, 'agree');
+  assert.equal(r.flags.length, 0);
+});
+
+test('reconcile: engine buy ขัด thesis sell/avoid = conflict (ขัดแรง)', () => {
+  assert.equal(reconcile({ engineStance: 'buy', thesisStance: 'sell', invStatus: 'ok', defenseLevel: 0 }).status, 'conflict');
+  assert.equal(reconcile({ engineStance: 'buy', thesisStance: 'avoid', invStatus: 'ok', defenseLevel: 0 }).status, 'conflict');
+});
+
+test('reconcile: engine buy vs thesis reduce = review (เพิ่ม vs ลด ไม่ใช่ขัดขั้ว)', () => {
+  const r = reconcile({ engineStance: 'buy', thesisStance: 'reduce', invStatus: 'ok', defenseLevel: 0 });
+  assert.equal(r.status, 'review');
+  assert.ok(r.flags.some(f => /reduce/.test(f.msg)));
+});
+
+test('reconcile: หลุด invalidation แต่ engine ยัง HOLD/buy = conflict (เคส AVGO)', () => {
+  const r = reconcile({ engineStance: 'wait', engineSignal: 'HOLD', thesisStance: null, invStatus: 'breached', defenseLevel: 0 });
+  assert.equal(r.status, 'conflict');
+  assert.ok(r.flags.some(f => /invalidation/.test(f.msg)));
+});
+
+test('reconcile: defense L2+ แต่ engine ซื้อ = review', () => {
+  const r = reconcile({ engineStance: 'buy', thesisStance: null, invStatus: 'ok', defenseLevel: 2 });
+  assert.equal(r.status, 'review');
+});
+
+test('reconcile: invalidation แคบผิดปกติ (<2%) = review', () => {
+  const r = reconcile({ engineStance: 'wait', thesisStance: null, invStatus: 'near', invTightPct: 1.2, defenseLevel: 0 });
+  assert.equal(r.status, 'review');
+  assert.ok(r.flags.some(f => /แคบผิดปกติ/.test(f.msg)));
+});
+
+test('reconcile: borderline + near invalidation = review (สัญญาณเปราะ)', () => {
+  const r = reconcile({ engineStance: 'buy', thesisStance: 'buy', invStatus: 'near', defenseLevel: 0, borderline: true });
+  assert.equal(r.status, 'review');
+});
+
+test('reconcile: ไม่มี thesis (cache ว่าง) ไม่ทำให้ conflict ผิด', () => {
+  const r = reconcile({ engineStance: 'buy', thesisStance: null, invStatus: 'ok', defenseLevel: 0 });
+  assert.equal(r.status, 'agree');
 });

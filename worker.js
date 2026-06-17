@@ -1636,6 +1636,16 @@ function labelFromConviction(score, regime) {
   if (score <= 35) return 'SELL';
   return 'HOLD';
 }
+// A1 — ป้าย BUY/HOLD/SELL พลิกเมื่อ conviction ข้ามเกณฑ์ (buyThresh / 35) · ใกล้เส้น = พลิกง่ายจาก noise รายวัน
+// ไม่แตะ labelFromConviction (กัน INVARIANT พัง) — แค่บอกว่าป้ายนี้ "ก้ำกึ่ง รอยืนยัน" หรือ "มั่นคง"
+const SIGNAL_BORDERLINE_BAND = 4;
+function signalStability(score, regime) {
+  if (score == null) return { borderline: false, distToFlip: null, nearBoundary: null };
+  const buy = buyThreshFor(regime);
+  const dBuy = Math.abs(score - buy), dSell = Math.abs(score - 35);
+  const dist = Math.min(dBuy, dSell);
+  return { borderline: dist <= SIGNAL_BORDERLINE_BAND, distToFlip: dist, nearBoundary: dBuy <= dSell ? buy : 35 };
+}
 
 // 3) POSITION SIZING — risk-based จาก ATR + riskConfig · ปรับขนาดตาม conviction (Kelly-lite)
 // extraFactor = ตัวคูณรวม (correlation penalty × kill-switch) — ลดไม้เมื่อเสี่ยงซ้ำ/แพ้ติด
@@ -1780,7 +1790,9 @@ async function computeDecision(env, opts = {}) {
     if (stance === 'buy' && earn && earn.daysUntil != null && earn.daysUntil >= 0 && earn.daysUntil <= 3) {
       stance = 'wait'; reason = `งบออกอีก ${earn.daysUntil} วัน — รอผ่านงบก่อน (กัน gap)`;
     }
+    const stab = signalStability(cv.score, regime.regime);
     return { symbol: s.symbol, name: s.name, core, price: s.price, signal: labelFromConviction(cv.score, regime.regime),
+      borderline: stab.borderline, distToFlip: stab.distToFlip,
       conviction: cv.score, dims: cv.dims, stance, reason, sizing, flags, earnings: earn, fund, fundFlags: fundamentalFlags(fund),
       rsi: s.rsi, rsiWeekly: s.rsiWeekly, macdHist: s.macdHist, roc10: s.roc10, cmf: s.cmf, rsVsSpx: s.rsVsSpx, rs3m: s.rs3m,
       atr14: s.atr14, beta1y: s.beta1y, volRatio: s.volRatio, changePct: s.changePct,
@@ -2582,6 +2594,77 @@ async function computeScenario(env, overrides = {}) {
   };
 }
 
+// ---------- A2 — CONSENSUS / CONFLICT DETECTOR ----------
+// "Judge" ของ multi-agent แต่ทำ deterministic: เทียบ 4 สัญญาณต่อหุ้น (engine · thesis(LLM) · invalidation · defense)
+// → จับ "ขัดกันเงียบ" (บทเรียน AVGO: engine HOLD แต่ invalidation บอกพัง) ก่อนผู้ใช้เห็นเอง
+// PURE: รับ input แล้วบอก agree/review/conflict + เหตุผล
+function reconcile(x) {
+  const L = s => String(s || '').toLowerCase();
+  const dir = s => { s = L(s); if (s === 'buy' || s === 'core') return 1; if (s === 'avoid' || s === 'reduce' || s === 'sell') return -1; return 0; };
+  const bull = s => { s = L(s); return s === 'buy' || s === 'core'; };
+  const hardBear = s => { s = L(s); return s === 'avoid' || s === 'sell'; };   // ขัดแรง: LLM บอก "อย่าถือ/ออก"
+  const softBear = s => L(s) === 'reduce';                                      // ขัดอ่อน: LLM บอก "ลดน้ำหนัก" (ยังถือ)
+  const eng = dir(x.engineStance);
+  const flags = [];
+  // engine vs thesis(LLM) — แยกความรุนแรง: avoid/sell = conflict · reduce = review (เพิ่ม vs ลด ไม่ใช่ขัดขั้ว)
+  if (x.thesisStance) {
+    if (bull(x.engineStance) && hardBear(x.thesisStance)) flags.push({ sev: 'conflict', msg: `engine=${x.engineStance} ขัดกับ thesis(AI)=${x.thesisStance}` });
+    else if (bull(x.engineStance) && softBear(x.thesisStance)) flags.push({ sev: 'review', msg: `engine=ซื้อ แต่ thesis(AI)=reduce — เพิ่ม vs ลด เช็คน้ำหนัก` });
+    else if (hardBear(x.engineStance) && bull(x.thesisStance)) flags.push({ sev: 'conflict', msg: `engine=${x.engineStance} ขัดกับ thesis(AI)=buy` });
+  }
+  if (x.invStatus === 'breached' && eng >= 0)
+    flags.push({ sev: 'conflict', msg: `หลุด invalidation แล้ว แต่ engine ยัง ${x.engineSignal || x.engineStance || '—'}` });
+  if (x.defenseLevel >= 2 && eng > 0)
+    flags.push({ sev: 'review', msg: `โหมดตั้งรับ L${x.defenseLevel} แต่ engine = ซื้อ` });
+  if (x.borderline && x.invStatus === 'near')
+    flags.push({ sev: 'review', msg: 'conviction ก้ำกึ่ง + ใกล้ invalidation — สัญญาณเปราะ รอยืนยัน' });
+  if (x.invTightPct != null && x.invTightPct < 2 && x.invStatus !== 'breached')
+    flags.push({ sev: 'review', msg: `invalidation แคบผิดปกติ (ต่ำกว่าราคาแค่ ${x.invTightPct}%) — เช็คว่าตั้งชิดไป` });
+  const status = flags.some(f => f.sev === 'conflict') ? 'conflict' : flags.length ? 'review' : 'agree';
+  return { status, flags };
+}
+async function computeConsensus(env) {
+  const [dec, posWatch] = await Promise.all([
+    computeDecision(env).catch(() => null),
+    computePositionWatch(env).catch(() => null),
+  ]);
+  if (!dec || dec.error) return { ok: false, error: (dec && dec.error) || 'decision engine error' };
+  const defense = defenseAssess(dec.regime);
+  // thesis stance จาก cache (อ่านตรง ไม่ trigger Gemini → ไม่เผา quota)
+  const thesisStance = {};
+  try { const raw = await env.WATCHLIST.get('thesisCache'); if (raw) { const c = JSON.parse(raw); (((c.data && c.data.theses) || c.theses) || []).forEach(t => { if (t && t.symbol) thesisStance[String(t.symbol).toUpperCase()] = t.stance; }); } } catch (e) {}
+  // invalidation status + ความชิด จาก posWatch
+  const invMap = {};
+  ((posWatch && posWatch.positions) || []).forEach(p => {
+    let tightPct = null;
+    if (p.invalidationPrice > 0 && p.price > 0 && p.price > p.invalidationPrice)
+      tightPct = +(((p.price - p.invalidationPrice) / p.price) * 100).toFixed(1);
+    invMap[String(p.symbol).toUpperCase()] = { status: p.status, tightPct };
+  });
+  const engineMap = {};
+  [...(dec.candidates || []), ...(dec.core || [])].forEach(c => { engineMap[String(c.symbol).toUpperCase()] = c; });
+  // ตรวจ: ตัวที่ถืออยู่ (posWatch) + buy candidates (ที่ระบบจะเข้า)
+  const symbols = new Set([...Object.keys(invMap), ...(dec.candidates || []).filter(c => c.stance === 'buy').map(c => String(c.symbol).toUpperCase())]);
+  const items = [];
+  symbols.forEach(sym => {
+    const c = engineMap[sym] || {};
+    const inv = invMap[sym] || {};
+    const r = reconcile({
+      engineStance: c.stance, engineSignal: c.signal, thesisStance: thesisStance[sym] || null,
+      invStatus: inv.status, invTightPct: inv.tightPct, defenseLevel: defense.level, borderline: !!c.borderline,
+    });
+    if (r.status !== 'agree')
+      items.push({ symbol: sym, status: r.status, flags: r.flags, engineSignal: c.signal || null, engineStance: c.stance || null, thesisStance: thesisStance[sym] || null, invStatus: inv.status || null });
+  });
+  items.sort((a, b) => (a.status === b.status) ? 0 : (a.status === 'conflict' ? -1 : 1));
+  return {
+    ok: true, updated: new Date().toISOString(), regime: dec.regime.regime, defenseLevel: defense.level,
+    conflicts: items.filter(i => i.status === 'conflict').length, reviews: items.filter(i => i.status === 'review').length,
+    items,
+    note: 'Consensus Detector (deterministic) — จับจุดที่ engine/thesis/invalidation/defense ขัดกัน · ไม่ใช่คำแนะนำการลงทุน',
+  };
+}
+
 // /defense — HTML สรุป Portfolio Defense (white card style เหมือน /risk /portfolio)
 async function handleDefense(env) {
   const d = await computeDefense(env).catch(e => ({ error: e && e.message }));
@@ -2828,6 +2911,11 @@ export default {
     if (url.pathname === '/api/scenario') {
       const ov = { dovish: url.searchParams.get('dovish'), neutral: url.searchParams.get('neutral'), hawkish: url.searchParams.get('hawkish') };
       const r = await computeScenario(env, ov).catch(e => ({ ok: false, error: e && e.message }));
+      return new Response(JSON.stringify(r, null, 2), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+    }
+    // /api/consensus — A2 Consensus/Conflict Detector JSON (จับ engine/thesis/invalidation/defense ขัดกัน)
+    if (url.pathname === '/api/consensus') {
+      const r = await computeConsensus(env).catch(e => ({ ok: false, error: e && e.message }));
       return new Response(JSON.stringify(r, null, 2), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
     }
     // /defense — M36 HTML (ดู/ก๊อปในเบราว์เซอร์ + ให้ AI browse)
@@ -3164,4 +3252,4 @@ export default {
 // Named exports สำหรับ unit test (node --test) — pure functions ล้วน · Wrangler ใช้แค่ default ไม่กระทบ deploy
 export { convictionScore, labelFromConviction, buyThreshFor, positionSize, corrPenaltyFor, CONV_WEIGHTS,
   defenseAssess, defenseHeadroom, DEFENSE_LEVELS, allocationRank, scenarioOutcome, defaultScenarios,
-  invalidationStatus, INVALIDATION_BUFFER_PCT };
+  invalidationStatus, INVALIDATION_BUFFER_PCT, signalStability, SIGNAL_BORDERLINE_BAND, reconcile };
