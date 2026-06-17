@@ -32,6 +32,14 @@ try {
   fs.unlinkSync(tmp);
 }
 
+// 2.5) hash เนื้อ app.js → cache-bust (?v=) · URL เปลี่ยนเฉพาะเมื่อโค้ดเปลี่ยน
+// กัน browser/edge/bfcache ค้างเวอร์ชันเก่าหลัง deploy — ไม่ต้อง hard-refresh อีก
+const appHash = require("crypto")
+  .createHash("sha1")
+  .update(fs.readFileSync(path.join(dir, "public", "app.js")))
+  .digest("hex")
+  .slice(0, 10);
+
 // 3) สร้าง public/dashboard.html — สลับ CDN เป็น vendor + app.js (ตัด Babel ทิ้ง)
 let html = srcHtml
   .replace(
@@ -45,10 +53,10 @@ let html = srcHtml
   .replace('<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>\n', "");
 // แทน babel block ด้วย <script src=/app.js>
 const block = srcHtml.slice(start, end + "</script>".length);
-html = html.replace(block, '<script src="/app.js"></script>');
+html = html.replace(block, `<script src="/app.js?v=${appHash}"></script>`);
 
 fs.writeFileSync(path.join(dir, "public", "dashboard.html"), html, "utf8");
 
 const sz = (p) => (fs.statSync(p).size / 1024).toFixed(1) + " KiB";
 console.log("✓ public/app.js        =", sz(path.join(dir, "public", "app.js")));
-console.log("✓ public/dashboard.html=", sz(path.join(dir, "public", "dashboard.html")));
+console.log("✓ public/dashboard.html=", sz(path.join(dir, "public", "dashboard.html")), "· app.js?v=" + appHash);
