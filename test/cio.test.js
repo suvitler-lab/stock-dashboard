@@ -2,7 +2,7 @@
 // เลขพวกนี้ตัดสินใจเรื่องเงิน (defense/allocation/scenario) → กัน regression เงียบ
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defenseAssess, allocationRank, scenarioOutcome, defaultScenarios } from '../worker.js';
+import { defenseAssess, allocationRank, scenarioOutcome, defaultScenarios, invalidationStatus, INVALIDATION_BUFFER_PCT } from '../worker.js';
 
 // ============ M36 — defenseAssess ============
 const HEALTHY = { aboveEma200Pct: 3, ndxAboveEma200Pct: 4, vix: 15, creditOk: true, breadthOk: true };
@@ -153,4 +153,36 @@ test('defaultScenarios: risk-off ให้ prob hawkish สูงกว่า ri
   assert.ok(hawkOff > hawkOn, 'risk-off ควรกลัว hawkish มากกว่า');
   assert.equal(off.reduce((s, x) => s + x.prob, 0), 100);
   assert.equal(on.reduce((s, x) => s + x.prob, 0), 100);
+});
+
+// ============ invalidationStatus — buffer กัน whipsaw ============
+test('invalidationStatus: ต่ำกว่าเส้นแค่ 0.17% (เคส AVGO จริง) = near "รอยืนยัน" ไม่ใช่ breached', () => {
+  const r = invalidationStatus(399.12, 399.81);  // ต่ำกว่า ~0.17%
+  assert.equal(r.status, 'near');
+  assert.ok(/รอ/.test(r.alert) && !/thesis เสี่ยงพัง/.test(r.alert), r.alert);
+});
+
+test('invalidationStatus: ต่ำกว่าเส้น ≥ buffer (1%) = breached จริง', () => {
+  const r = invalidationStatus(395, 399.81);  // ต่ำกว่า ~1.2%
+  assert.equal(r.status, 'breached');
+  assert.ok(/หลุด invalidation/.test(r.alert) && /เสี่ยงพัง/.test(r.alert));
+});
+
+test('invalidationStatus: ขอบ buffer พอดี (−1.0%) = breached (ไม่ใช่ near)', () => {
+  const inv = 100, price = 100 * (1 - INVALIDATION_BUFFER_PCT / 100);  // ต่ำกว่าพอดี 1%
+  assert.equal(invalidationStatus(price, inv).status, 'breached');
+});
+
+test('invalidationStatus: เหนือเส้นแต่ใกล้ ≤3% = near (เตือนเข้าใกล้)', () => {
+  assert.equal(invalidationStatus(102, 100).status, 'near');
+});
+
+test('invalidationStatus: เหนือเส้นเยอะ >3% = ok (ไม่เตือน)', () => {
+  assert.equal(invalidationStatus(110, 100).status, 'ok');
+});
+
+test('invalidationStatus: ไม่มี invalidation/ราคา = ok (ไม่เดา)', () => {
+  assert.equal(invalidationStatus(100, 0).status, 'ok');
+  assert.equal(invalidationStatus(100, null).status, 'ok');
+  assert.equal(invalidationStatus(0, 100).status, 'ok');
 });

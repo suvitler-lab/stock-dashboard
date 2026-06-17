@@ -1820,6 +1820,24 @@ async function computeDecision(env, opts = {}) {
   };
 }
 
+// invalidation breach ต้องมี "buffer" — กัน whipsaw ตอนราคาแกว่งรอบเส้นระหว่างวัน (เส้นนี้ไม่มี hysteresis เหมือน regime)
+// ต่ำกว่าเส้น ≥ INVALIDATION_BUFFER_PCT = หลุดจริง (breached) · ต่ำกว่าเล็กน้อย = แค่ "แตะ" รอยืนยัน (near) ยังไม่ประกาศ thesis พัง
+// เหตุ: ต่ำกว่า 0.2% (intraday) ไม่ใช่หลักฐานว่า thesis พัง โดยเฉพาะวันที่หุ้นเขียว — ต้องรอ "ปิดต่ำกว่าชัดเจน"
+const INVALIDATION_BUFFER_PCT = 1.0;
+function invalidationStatus(price, invPrice) {
+  const r = (x, d = 2) => (x == null || isNaN(x)) ? null : +(+x).toFixed(d);
+  if (!(invPrice > 0) || !(price > 0)) return { status: 'ok', alert: null };
+  const belowPct = (invPrice - price) / invPrice * 100;            // >0 = ราคาอยู่ใต้เส้น
+  if (belowPct >= INVALIDATION_BUFFER_PCT)
+    return { status: 'breached', alert: `🛑 หลุด invalidation $${r(invPrice)} ชัดเจน (ต่ำกว่า −${r(belowPct, 1)}%) — thesis เสี่ยงพัง พิจารณาลด/ออก` };
+  if (belowPct > 0)                                                // แตะ/ต่ำกว่าเล็กน้อย — ยังไม่ยืนยัน
+    return { status: 'near', alert: `⚠️ แตะ invalidation $${r(invPrice)} (ต่ำกว่าแค่ −${r(belowPct, 1)}%) — รอ "ปิดต่ำกว่าชัดเจน" ก่อนสรุป thesis พัง · อย่าตัดสินจากราคาแกว่งระหว่างวัน` };
+  const abovePct = (price - invPrice) / price * 100;
+  if (abovePct <= 3)
+    return { status: 'near', alert: `⚠️ ใกล้ invalidation $${r(invPrice)} (เหนือเส้น +${r(abovePct, 1)}%)` };
+  return { status: 'ok', alert: null };
+}
+
 // POSITION TRACKING — เชื่อม position จริง (KV) กับ invalidation ล่าสุดจาก thesis (D1) → เตือนใกล้/หลุด
 async function computePositionWatch(env) {
   const port = await computePortfolio(env).catch(() => null);
@@ -1840,11 +1858,7 @@ async function computePositionWatch(env) {
     const plPct = avgCost ? (h.price - avgCost) / avgCost * 100 : null;
     const inv = invMap[h.symbol];
     const invPrice = inv && inv.invalidation_price;
-    let status = 'ok', alert = null;
-    if (invPrice > 0 && h.price > 0) {
-      if (h.price <= invPrice) { status = 'breached'; alert = `🛑 หลุด invalidation $${rnd(invPrice)} — thesis พัง พิจารณาออก`; }
-      else if ((h.price - invPrice) / h.price <= 0.03) { status = 'near'; alert = `⚠️ ใกล้ invalidation $${rnd(invPrice)} (ห่าง ${rnd((h.price - invPrice) / h.price * 100, 1)}%)`; }
-    }
+    const { status, alert } = invalidationStatus(h.price, invPrice);
     return { symbol: h.symbol, name: h.name, qty: h.qty, price: rnd(h.price), avgCost: rnd(avgCost), plPct: rnd(plPct), invalidationPrice: rnd(invPrice), thesisDate: inv && inv.ts_iso ? String(inv.ts_iso).slice(0, 10) : null, status, alert };
   });
   return { ok: true, updated: new Date().toISOString(), positions };
@@ -3149,4 +3163,5 @@ export default {
 
 // Named exports สำหรับ unit test (node --test) — pure functions ล้วน · Wrangler ใช้แค่ default ไม่กระทบ deploy
 export { convictionScore, labelFromConviction, buyThreshFor, positionSize, corrPenaltyFor, CONV_WEIGHTS,
-  defenseAssess, defenseHeadroom, DEFENSE_LEVELS, allocationRank, scenarioOutcome, defaultScenarios };
+  defenseAssess, defenseHeadroom, DEFENSE_LEVELS, allocationRank, scenarioOutcome, defaultScenarios,
+  invalidationStatus, INVALIDATION_BUFFER_PCT };
