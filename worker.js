@@ -1419,7 +1419,13 @@ async function logDailySnapshot(env, force = false) {
   if (!force && d.spxLastBarTs) {
     const etToday = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
     const etLastBar = new Date(d.spxLastBarTs * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-    if (etLastBar !== etToday) return { ok: true, skipped: true, reason: 'market-closed-or-stale', etToday, etLastBar };
+    if (etLastBar !== etToday) {
+      // แยก "ตลาดปิดจริง (เสาร์/อาทิตย์/วันหยุด)" จาก "วันธรรมดาแต่ Yahoo ส่งแท่งช้า" — อันหลังคือ false skip ที่ทำ snapshot หาย
+      const etDow = new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'short' });
+      const weekday = !['Sat', 'Sun'].includes(etDow);
+      return { ok: true, skipped: true, weekday, etToday, etLastBar,
+        reason: weekday ? 'stale-on-weekday (Yahoo lag?) — catch-up cron 01:00 UTC จะ retry' : 'market-closed' };
+    }
   }
   const tsDate = new Date(d.updated).toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' }); // YYYY-MM-DD เวลาไทย
   const spxChg = d.spxChangePct != null ? d.spxChangePct : null;
@@ -2339,6 +2345,16 @@ async function runDailyCron(env) {
   }
 }
 
+// CATCH-UP SNAPSHOT — รัน 01:00 UTC (≈2 ชม.หลัง daily cron 22:00) เผื่อตอน 22:00 Yahoo ส่งแท่งวันนี้ช้า → daily skip
+// idempotent (INSERT OR IGNORE) → ถ้า daily ลงไปแล้ว = no-op · ถ้า daily skip เพราะ lag = อันนี้ backfill ให้ · ไม่ยิง alert/heartbeat ซ้ำ
+async function runCatchupSnapshot(env) {
+  const snap = await logDailySnapshot(env).catch(e => ({ ok: false, error: e && e.message }));
+  // ลง snapshot สำเร็จ (ไม่ skip) → log resolution วันนั้นด้วย (idempotent) เผื่อ daily ก็ skip ไป
+  if (snap && snap.ok && !snap.skipped) await logResolutions(env).catch(() => {});
+  if (snap && snap.skipped && snap.weekday) await pingHeartbeat(env, true, `catch-up ยัง stale (${snap.etLastBar}≠${snap.etToday}) — Yahoo lag ยาว`).catch(() => {});
+  return snap;
+}
+
 // CSV ของ signal_history — ใช้ทั้ง /api/journal-export และ backup รายสัปดาห์ (source เดียว กัน duplication ตาม [[signal-three-places]])
 async function journalCsv(env, days = 3650) {
   const since = new Date(Date.now() - days * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
@@ -2846,6 +2862,8 @@ export default {
     _env = env;
     if (event.cron === '0 22 * * 1-5') {
       ctx.waitUntil(runDailyCron(env));
+    } else if (event.cron === '0 1 * * 2-6') {
+      ctx.waitUntil(runCatchupSnapshot(env).catch(e => console.error('catch-up snapshot:', e && e.message)));
     } else if (event.cron === '0 23 * * 6') {
       ctx.waitUntil(runWeeklyBackup(env).catch(e => console.error('weekly backup:', e && e.message)));
     } else {
