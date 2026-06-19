@@ -603,7 +603,8 @@ function CommandCenter({decide,posWatch,perf,tstats,defense,scenario,consensus,o
               ? <div style={{fontSize:12.5,marginTop:5,color:"#fca5a5"}}>🚨 {defense.triggers.join(" · ")}</div>
               : <div style={{fontSize:12.5,marginTop:5,color:"#22c55e"}}>ไม่มี trigger ตลาดเปิด{defense.headroom&&defense.headroom.length?" — "+defense.headroom.join(" · "):""}</div>}
             <div style={{fontSize:12.5,marginTop:5}}>📌 {defense.action}</div>
-            {trim.length>0&&<div style={{fontSize:12,marginTop:5,color:"var(--dim)"}}>✂️ trim ก่อน: {trim.map(p=>p.symbol+" −"+p.trimPct+"% (β"+(p.beta!=null?p.beta:"—")+")").join(" · ")} · ได้เงินสด ~${Number(defense.totalFreed||0).toLocaleString()}</div>}
+            {trim.length>0&&<div style={{fontSize:12,marginTop:5,color:"var(--dim)"}}>✂️ trim ก่อน: {trim.map(p=>p.symbol+" −"+p.trimPct+"% (β"+(p.beta!=null?p.beta:"—")+(p.betaReliable===false?"⚠":"")+")").join(" · ")} · ได้เงินสด ~${Number(defense.totalFreed||0).toLocaleString()}</div>}
+            {defense.betaUnreliable&&defense.betaUnreliable.length>0&&<div style={{fontSize:11,marginTop:4,color:"#f59e0b"}}>⚠ beta ของ {defense.betaUnreliable.join("/")} เพี้ยน (ข้อมูล fallback) — ใช้ 1.0 แทน · ความเสี่ยงจริงอาจสูงกว่าที่แสดง</div>}
           </div>
         );
       })()}

@@ -2,7 +2,7 @@
 // เลขพวกนี้ตัดสินใจเรื่องเงิน (defense/allocation/scenario) → กัน regression เงียบ
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defenseAssess, allocationRank, scenarioOutcome, defaultScenarios, invalidationStatus, INVALIDATION_BUFFER_PCT, signalStability, reconcile, buyThreshFor, resolveLayers, resolveScore, resolveVerdict, betaVsSpx } from '../worker.js';
+import { defenseAssess, allocationRank, scenarioOutcome, defaultScenarios, invalidationStatus, INVALIDATION_BUFFER_PCT, signalStability, reconcile, buyThreshFor, resolveLayers, resolveScore, resolveVerdict, betaVsSpx, betaReliable, betaForRisk } from '../worker.js';
 
 // ============ M36 — defenseAssess ============
 const HEALTHY = { aboveEma200Pct: 3, ndxAboveEma200Pct: 4, vix: 15, creditOk: true, breadthOk: true };
@@ -323,4 +323,21 @@ test('betaVsSpx: หุ้น "ขาดแท่งวันล่าสุด"
   assert.ok(Math.abs(betaVsSpx(stkC, spxC, 252, stkTs, spxTs) - 2) < 0.05, 'date-align ต้อง ≈2');
   const tail = betaVsSpx(stkC, spxC, 252);   // ไม่มี ts → เหลื่อม 1 วัน (alternating → กลับขั้ว)
   assert.ok(Math.abs(tail - 2) > 0.3, 'tail-align ต้องเพี้ยนชัด (tail=' + tail + ')');
+});
+
+// ============ betaReliable / betaForRisk — เกราะกัน beta เพี้ยน ============
+test('betaReliable: equity beta 0.1–4 = น่าเชื่อถือ · ติดลบ/ใกล้0/สูงเว่อร์/null = ไม่', () => {
+  assert.equal(betaReliable(1.5), true);
+  assert.equal(betaReliable(0.5), true);
+  assert.equal(betaReliable(-0.49), false);   // เคส GEV
+  assert.equal(betaReliable(-0.07), false);   // เคส SMH
+  assert.equal(betaReliable(0.05), false);
+  assert.equal(betaReliable(5), false);
+  assert.equal(betaReliable(null), false);
+});
+
+test('betaForRisk: เพี้ยน → ใช้ 1.0 แทน (market beta) · ปกติ → ค่าเดิม', () => {
+  assert.equal(betaForRisk(1.84), 1.84);
+  assert.equal(betaForRisk(-0.49), 1.0);
+  assert.equal(betaForRisk(null), 1.0);
 });

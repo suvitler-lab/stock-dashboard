@@ -318,6 +318,10 @@ function corrBetween(aCloses, bCloses, period, aTs, bTs) {
   for (let i = 0; i < n; i++) { num += (ar[i] - ma) * (br[i] - mb); da += (ar[i] - ma) ** 2; db += (br[i] - mb) ** 2; }
   return (da > 0 && db > 0) ? +(num / Math.sqrt(da * db)).toFixed(2) : null;
 }
+// เกราะกัน beta เพี้ยน: หุ้น/ETF ในพอร์ตควร beta บวกเสมอ (~0.2–3.5) · ติดลบ/ใกล้ 0 / สูงเว่อร์ = ข้อมูลเพี้ยน
+// (เคส GEV −0.49 จาก data fallback) → ในการคิดความเสี่ยงแทนด้วย 1.0 (market beta) กัน VaR/scenario ต่ำเกินจริง
+function betaReliable(b) { return b != null && b >= 0.1 && b <= 4; }
+function betaForRisk(b) { return betaReliable(b) ? b : 1.0; }
 // RS vs S&P500 — ดึง %เปลี่ยนของดัชนี ^GSPC ครั้งเดียว เทียบกับหุ้นแต่ละตัว
 async function spxChangePct() {
   const q = await yahooDaily('^GSPC', '5d', '1d').catch(() => null);
@@ -2484,20 +2488,28 @@ async function computeDefense(env) {
   const rnd = (x, d = 2) => (x == null || isNaN(x)) ? null : +Number(x).toFixed(d);
   const holdings = (port && port.positions) ? port.positions.filter(h => h.ok) : [];
   const totalVal = holdings.reduce((s, h) => s + (h.value || 0), 0);
-  // weighted beta (เฉพาะที่รู้ beta) + coverage บอกว่าครอบคลุมกี่ %
-  let wBetaNum = 0, betaCov = 0;
-  holdings.forEach(h => { const b = betaMap[h.symbol]; if (b != null && totalVal > 0) { const w = h.value / totalVal; wBetaNum += w * b; betaCov += w; } });
-  const weightedBeta = betaCov > 0 ? wBetaNum / betaCov : null;   // normalize ด้วย coverage กัน bias ตอนข้อมูลขาด
-  // trim plan — tactical (non-core) เรียง beta สูง→ต่ำ trim ก่อน · core เก็บไว้
+  // weighted beta — เกราะกันเลขเพี้ยน: beta ที่ไม่น่าเชื่อถือ (ติดลบ/ใกล้ 0) ใช้ 1.0 แทน กัน VaR ต่ำเกินจริง
+  let wBetaNum = 0, betaCov = 0; const betaBad = [];
+  holdings.forEach(h => {
+    if (totalVal <= 0) return;
+    const raw = betaMap[h.symbol];
+    if (raw == null) return;                            // ไม่มี beta เลย → coverage ไม่นับ
+    if (!betaReliable(raw)) betaBad.push(h.symbol);
+    const w = h.value / totalVal;
+    wBetaNum += w * betaForRisk(raw); betaCov += w;     // substitute 1.0 ถ้าเพี้ยน
+  });
+  const weightedBeta = betaCov > 0 ? wBetaNum / betaCov : null;
+  // trim plan — tactical (non-core) เรียง beta สูง→ต่ำ trim ก่อน · core เก็บไว้ · beta เพี้ยน → ใช้ riskBeta จัดอันดับ
   const plan = holdings.map(h => {
     const core = isCore(h.symbol, watchMap[h.symbol]);
     const beta = betaMap[h.symbol] != null ? betaMap[h.symbol] : null;
+    const betaOk = betaReliable(beta);
     const trimPct = core ? 0 : assess.trimTacticalPct;
     const sharesToSell = trimPct > 0 ? +(h.qty * trimPct / 100).toFixed(4) : 0;
     const valueFreed = trimPct > 0 ? +(sharesToSell * (h.price || 0)).toFixed(2) : 0;
-    return { symbol: h.symbol, name: h.name, core, beta: rnd(beta), weight: rnd(h.weight), price: rnd(h.price),
+    return { symbol: h.symbol, name: h.name, core, beta: rnd(beta), betaReliable: betaOk, weight: rnd(h.weight), price: rnd(h.price),
       qty: h.qty, trimPct, sharesToSell, valueFreed, keep: core || trimPct === 0 };
-  }).sort((a, b) => (b.core === a.core) ? ((b.beta || 0) - (a.beta || 0)) : (a.core ? 1 : -1));  // tactical ก่อน, beta สูงก่อน
+  }).sort((a, b) => (b.core === a.core) ? (betaForRisk(b.beta) - betaForRisk(a.beta)) : (a.core ? 1 : -1));  // tactical ก่อน, beta(เพื่อเสี่ยง)สูงก่อน
   const totalFreed = +plan.reduce((s, p) => s + (p.valueFreed || 0), 0).toFixed(2);
   return {
     updated: new Date().toISOString(),
@@ -2506,11 +2518,13 @@ async function computeDefense(env) {
     headroom: assess.level === 0 ? defenseHeadroom(regime) : [],
     portfolioValue: rnd(totalVal), weightedBeta: rnd(weightedBeta), betaCoveragePct: rnd(betaCov * 100),
     trimPlan: plan, totalFreed,
+    betaUnreliable: betaBad,
     assumptions: [
+      betaBad.length ? `⚠️ beta ของ ${betaBad.join('/')} เพี้ยน (ติดลบ/ใกล้ 0 — ข้อมูล fallback) → ใช้ 1.0 แทนในการคิดเสี่ยง · ค่าจริงน่าจะสูงกว่า (หุ้นพวกนี้เป็น high-beta) = ความเสี่ยงจริงอาจมากกว่าที่แสดง` : null,
       'trigger อิง market-regime indicators ที่คำนวณจากราคาจริง (SPX/NDX vs EMA200, VIX, HYG, RSP)',
       'weighted beta เป็นค่าประมาณ (beta 1y, ครอบคลุม ' + (rnd(betaCov * 100) ?? 0) + '% ของพอร์ต) — ใช้ชี้ขนาดความเสี่ยงสัมพัทธ์ ไม่ใช่พยากรณ์เป๊ะ',
       'cash level จริงไม่ได้ track ในระบบ → L3 บอกเป้าหมาย cash เชิงทิศทาง ไม่ใช่คำนวณจากเงินสดจริง',
-    ],
+    ].filter(Boolean),
     note: 'M36 Portfolio Defense (deterministic) — ไม่ใช้ LLM · ไม่ใช่คำแนะนำการลงทุน',
   };
 }
@@ -2628,8 +2642,9 @@ async function computeScenario(env, overrides = {}) {
     computePortfolio(env).catch(() => null),
     computeWatchlistData(env, { cached: true }).catch(() => null),
   ]);
-  const betaMap = {};
-  if (wd && wd.stocks) wd.stocks.forEach(s => { if (s && s.symbol && s.beta1y != null) betaMap[String(s.symbol).toUpperCase()] = s.beta1y; });
+  // เกราะ beta: เพี้ยน (ติดลบ/ใกล้ 0) → ใช้ 1.0 แทน กัน scenario ต่ำเกินจริง
+  const betaMap = {}; const betaBad = [];
+  if (wd && wd.stocks) wd.stocks.forEach(s => { if (s && s.symbol && s.beta1y != null) { if (!betaReliable(s.beta1y)) betaBad.push(String(s.symbol).toUpperCase()); betaMap[String(s.symbol).toUpperCase()] = betaForRisk(s.beta1y); } });
   const holdings = (port && port.positions) ? port.positions.filter(h => h.ok) : [];
   let scenarios = defaultScenarios(regime.regime);
   // override prob ผ่าน query (?dovish=40&neutral=35&hawkish=25) — ผู้ใช้กำหนดเอง ไม่ให้ LLM ปั้น
@@ -2645,6 +2660,7 @@ async function computeScenario(env, overrides = {}) {
     assumptions: [
       'ความน่าจะเป็นแต่ละฉากเป็นค่า subjective (default ตาม regime · ปรับเองได้ผ่าน ?dovish=&neutral=&hawkish=)',
       'ผลพอร์ต ≈ Σ(น้ำหนัก × beta × การเคลื่อนของตลาดสมมติ) · beta เป็นค่าประมาณ 1y',
+      betaBad.length ? `⚠️ beta ของ ${betaBad.join('/')} เพี้ยน → ใช้ 1.0 แทน · ผลฉากจริงอาจแรงกว่า (หุ้นพวกนี้ high-beta)` : null,
       'marketMove สมมติ (dovish +8% / neutral +2% / hawkish −12%) เป็นฉากตัวอย่าง — ใช้ชี้ทิศทาง/ขนาดความเสี่ยงสัมพัทธ์ ไม่ใช่พยากรณ์ราคา',
       r.probSum !== 100 ? `⚠️ ผลรวมความน่าจะเป็น = ${r.probSum}% (ไม่ครบ 100%) → expected return จะเพี้ยน` : null,
     ].filter(Boolean),
@@ -2829,7 +2845,7 @@ async function handleDefense(env) {
     : `<li style="color:#16a34a">ไม่มี trigger ตลาดเปิด${d.headroom.length ? ' — ' + d.headroom.map(esc).join(' · ') : ''}</li>`;
   const trimRows = (d.trimPlan || []).map(p => `<tr>
     <td><b>${esc(p.symbol)}</b> ${p.core ? '<span class=tag>core</span>' : ''}<br><span class=n>${esc(p.name)}</span></td>
-    <td class=num>${p.beta == null ? '—' : f(p.beta)}</td>
+    <td class=num>${p.beta == null ? '—' : f(p.beta) + (p.betaReliable === false ? ' <span style="color:#dc2626" title="beta เพี้ยน — ใช้ 1.0 แทนในการคิดเสี่ยง">⚠</span>' : '')}</td>
     <td class=num>${f(p.weight)}%</td>
     <td class=num>${p.keep ? '<span style="color:#16a34a">เก็บไว้</span>' : f(p.trimPct, 0) + '%'}</td>
     <td class=num>${p.sharesToSell ? qtyFmt(p.sharesToSell) : '—'}</td>
@@ -3446,4 +3462,4 @@ export { convictionScore, labelFromConviction, buyThreshFor, positionSize, corrP
   defenseAssess, defenseHeadroom, DEFENSE_LEVELS, allocationRank, scenarioOutcome, defaultScenarios,
   invalidationStatus, INVALIDATION_BUFFER_PCT, signalStability, SIGNAL_BORDERLINE_BAND, reconcile,
   resolveLayers, resolveScore, resolveVerdict, RESOLVE_WEIGHTS,
-  betaVsSpx, corrBetween, alignedReturns };
+  betaVsSpx, corrBetween, alignedReturns, betaReliable, betaForRisk };
