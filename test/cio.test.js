@@ -2,7 +2,7 @@
 // เลขพวกนี้ตัดสินใจเรื่องเงิน (defense/allocation/scenario) → กัน regression เงียบ
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defenseAssess, allocationRank, scenarioOutcome, defaultScenarios, invalidationStatus, INVALIDATION_BUFFER_PCT, signalStability, reconcile, buyThreshFor, resolveLayers, resolveScore, resolveVerdict } from '../worker.js';
+import { defenseAssess, allocationRank, scenarioOutcome, defaultScenarios, invalidationStatus, INVALIDATION_BUFFER_PCT, signalStability, reconcile, buyThreshFor, resolveLayers, resolveScore, resolveVerdict, betaVsSpx } from '../worker.js';
 
 // ============ M36 — defenseAssess ============
 const HEALTHY = { aboveEma200Pct: 3, ndxAboveEma200Pct: 4, vix: 15, creditOk: true, breadthOk: true };
@@ -302,4 +302,25 @@ test('resolveVerdict: held + thesis sell/avoid score ต่ำ → REDUCE (ไ�
   assert.equal(resolveVerdict(44, { held: true, thesisStance: 'sell' }).verdict, 'REDUCE');
   assert.equal(resolveVerdict(44, { held: true, thesisStance: 'avoid' }).verdict, 'REDUCE');
   assert.equal(resolveVerdict(50, { held: false, thesisStance: 'sell' }).verdict, 'หลีกเลี่ยงเพิ่ม'); // ไม่ถือ = แค่ไม่เพิ่ม
+});
+
+// ============ betaVsSpx — date-aligned (กัน beta เพี้ยนจาก series เหลื่อมวัน) ============
+test('betaVsSpx: หุ้น return 2× ตลาด วันเดียวกัน → beta ≈ 2', () => {
+  const DAY = 86400, N = 60;
+  const spxC = [100], spxTs = [0];
+  for (let i = 1; i <= N; i++) { spxC.push(spxC[i - 1] * (1 + ((i % 2) ? 0.01 : -0.008))); spxTs.push(i * DAY); }
+  const stkC = [100], stkTs = [0];
+  for (let i = 1; i <= N; i++) { const r = (spxC[i] - spxC[i - 1]) / spxC[i - 1]; stkC.push(stkC[i - 1] * (1 + 2 * r)); stkTs.push(i * DAY); }
+  assert.ok(Math.abs(betaVsSpx(stkC, spxC, 252, stkTs, spxTs) - 2) < 0.05);
+});
+
+test('betaVsSpx: หุ้น "ขาดแท่งวันล่าสุด" (ข้อมูล lag) → date-align ≈2 · tail-align เหลื่อม 1 วันจนเพี้ยน/ติดลบ (เคส GEV)', () => {
+  const DAY = 86400, N = 60;
+  const spxC = [100], spxTs = [0];
+  for (let i = 1; i <= N; i++) { spxC.push(spxC[i - 1] * (1 + ((i % 2) ? 0.012 : -0.009))); spxTs.push(i * DAY); }   // สลับขึ้น/ลง
+  const stkC = [100], stkTs = [0];
+  for (let i = 1; i < N; i++) { const r = (spxC[i] - spxC[i - 1]) / spxC[i - 1]; stkC.push(stkC[i - 1] * (1 + 2 * r)); stkTs.push(i * DAY); }   // ถึง N-1 (ขาดวันสุดท้าย)
+  assert.ok(Math.abs(betaVsSpx(stkC, spxC, 252, stkTs, spxTs) - 2) < 0.05, 'date-align ต้อง ≈2');
+  const tail = betaVsSpx(stkC, spxC, 252);   // ไม่มี ts → เหลื่อม 1 วัน (alternating → กลับขั้ว)
+  assert.ok(Math.abs(tail - 2) > 0.3, 'tail-align ต้องเพี้ยนชัด (tail=' + tail + ')');
 });

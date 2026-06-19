@@ -280,27 +280,42 @@ function atr(ohlc, period = 14) {
   return trs.slice(-period).reduce((a, b) => a + b, 0) / period;
 }
 // Beta vs ตลาด (252 วัน) — beta > 1 ผันผวนกว่า S&P500
-function betaVsSpx(stockCloses, spxCloses, period = 252) {
-  const sr = dailyReturns(stockCloses.slice(-(period + 1)));
-  const mr = dailyReturns(spxCloses.slice(-(period + 1)));
-  const n = Math.min(sr.length, mr.length);
+// จับคู่ daily returns ตาม "วันที่" (timestamp) ไม่ใช่ตำแหน่งท้าย — กัน beta/corr เพี้ยนเมื่อ 2 series วันไม่ตรงกัน
+// (เคสจริง: GEV/SMH/LLY ได้ beta ติดลบเพราะ tail-align ผิดวัน) · ถ้าไม่มี ts → fallback tail-align แบบเดิม
+function alignedReturns(closesA, tsA, closesB, tsB, period) {
+  let a, b;
+  if (tsA && tsB && tsA.length === closesA.length && tsB.length === closesB.length) {
+    const mapB = new Map();
+    for (let i = 0; i < tsB.length; i++) if (closesB[i] != null) mapB.set(Math.floor(tsB[i] / 86400), closesB[i]);
+    const ca = [], cb = [];
+    for (let i = 0; i < tsA.length; i++) {
+      const m = mapB.get(Math.floor(tsA[i] / 86400));   // bucket เป็นวัน (UTC) → จับคู่เฉพาะวันที่มีทั้งคู่
+      if (m != null && closesA[i] != null) { ca.push(closesA[i]); cb.push(m); }
+    }
+    a = dailyReturns(ca); b = dailyReturns(cb);
+  } else {
+    a = dailyReturns(closesA); b = dailyReturns(closesB);
+  }
+  const n = Math.min(a.length, b.length, period || Infinity);
+  return n > 0 ? { a: a.slice(-n), b: b.slice(-n) } : { a: [], b: [] };
+}
+function betaVsSpx(stockCloses, spxCloses, period = 252, stockTs, spxTs) {
+  const { a: sr, b: mr } = alignedReturns(stockCloses, stockTs, spxCloses, spxTs, period);
+  const n = sr.length;
   if (n < 30) return null;
-  const sa = sr.slice(-n), ma = mr.slice(-n);
-  const ms = sa.reduce((x, y) => x + y, 0) / n, mm = ma.reduce((x, y) => x + y, 0) / n;
+  const ms = sr.reduce((x, y) => x + y, 0) / n, mm = mr.reduce((x, y) => x + y, 0) / n;
   let cov = 0, varM = 0;
-  for (let i = 0; i < n; i++) { cov += (sa[i] - ms) * (ma[i] - mm); varM += (ma[i] - mm) ** 2; }
+  for (let i = 0; i < n; i++) { cov += (sr[i] - ms) * (mr[i] - mm); varM += (mr[i] - mm) ** 2; }
   return varM > 0 ? +(cov / varM).toFixed(2) : null;
 }
-// Correlation ระหว่าง 2 ชุด closes ในช่วง period วัน (daily returns)
-function corrBetween(aCloses, bCloses, period) {
-  const ar = dailyReturns(aCloses.slice(-(period + 1)));
-  const br = dailyReturns(bCloses.slice(-(period + 1)));
-  const n = Math.min(ar.length, br.length);
+// Correlation ระหว่าง 2 ชุด closes ในช่วง period วัน (date-aligned)
+function corrBetween(aCloses, bCloses, period, aTs, bTs) {
+  const { a: ar, b: br } = alignedReturns(aCloses, aTs, bCloses, bTs, period);
+  const n = ar.length;
   if (n < 10) return null;
-  const aa = ar.slice(-n), bb = br.slice(-n);
-  const ma = aa.reduce((x, y) => x + y, 0) / n, mb = bb.reduce((x, y) => x + y, 0) / n;
+  const ma = ar.reduce((x, y) => x + y, 0) / n, mb = br.reduce((x, y) => x + y, 0) / n;
   let num = 0, da = 0, db = 0;
-  for (let i = 0; i < n; i++) { num += (aa[i] - ma) * (bb[i] - mb); da += (aa[i] - ma) ** 2; db += (bb[i] - mb) ** 2; }
+  for (let i = 0; i < n; i++) { num += (ar[i] - ma) * (br[i] - mb); da += (ar[i] - ma) ** 2; db += (br[i] - mb) ** 2; }
   return (da > 0 && db > 0) ? +(num / Math.sqrt(da * db)).toFixed(2) : null;
 }
 // RS vs S&P500 — ดึง %เปลี่ยนของดัชนี ^GSPC ครั้งเดียว เทียบกับหุ้นแต่ละตัว
@@ -532,6 +547,7 @@ async function _computeWatchlistDataRaw(env, opts = {}) {
     })),
   ]);
   const spxCloses = (spxFull && spxFull.ok) ? spxFull.closes : [];
+  const spxTimestamps = (spxFull && spxFull.ok) ? spxFull.timestamps : null;
   // ⚠️ range=1y → prevClose (chartPreviousClose) = ราคา 1 ปีก่อน ห้ามใช้! ต้องใช้ closes[-2] (ปิดเมื่อวาน)
   // robust: ถ้าแท่งล่าสุด ≈ ราคาปัจจุบัน = วันนี้ปิดแล้ว → ฐาน = closes[-2] · ไม่งั้น (intraday) closes[-1] = เมื่อวาน
   let spxChg = null;
@@ -566,9 +582,9 @@ async function _computeWatchlistDataRaw(env, opts = {}) {
     ind.rsVsSpx = (stockChg != null && spxChg != null) ? +(stockChg - spxChg).toFixed(2) : null;
     // ATR14 · Beta1y · Correlation vs SPX (30d / 60d)
     const atrVal = atr(q.ohlc, 14);
-    const betaVal = betaVsSpx(c, spxCloses, 252);
-    const corr30 = corrBetween(c, spxCloses, 30);
-    const corr60 = corrBetween(c, spxCloses, 60);
+    const betaVal = betaVsSpx(c, spxCloses, 252, q.timestamps, spxTimestamps);
+    const corr30 = corrBetween(c, spxCloses, 30, q.timestamps, spxTimestamps);
+    const corr60 = corrBetween(c, spxCloses, 60, q.timestamps, spxTimestamps);
     // Relative Strength แบบ "เทรนด์ 3 เดือน" (≈63 วันทำการ) เทียบ S&P500 — RS จริงเป็นเทรนด์ ไม่ใช่ noise วันเดียว
     let rs3m = null;
     if (c.length >= 64 && spxCloses.length >= 64) {
@@ -609,7 +625,7 @@ async function _computeWatchlistDataRaw(env, opts = {}) {
   const pairCorr30 = [];
   for (let i = 0; i < okRaws.length; i++) {
     for (let j = i + 1; j < okRaws.length; j++) {
-      const c30 = corrBetween(okRaws[i].closes, okRaws[j].closes, 30);
+      const c30 = corrBetween(okRaws[i].closes, okRaws[j].closes, 30, okRaws[i].timestamps, okRaws[j].timestamps);
       if (c30 != null && Math.abs(c30) >= 0.70) pairCorr30.push({ a: okRaws[i].symbol, b: okRaws[j].symbol, corr30: c30 });
     }
   }
@@ -3429,4 +3445,5 @@ export default {
 export { convictionScore, labelFromConviction, buyThreshFor, positionSize, corrPenaltyFor, CONV_WEIGHTS,
   defenseAssess, defenseHeadroom, DEFENSE_LEVELS, allocationRank, scenarioOutcome, defaultScenarios,
   invalidationStatus, INVALIDATION_BUFFER_PCT, signalStability, SIGNAL_BORDERLINE_BAND, reconcile,
-  resolveLayers, resolveScore, resolveVerdict, RESOLVE_WEIGHTS };
+  resolveLayers, resolveScore, resolveVerdict, RESOLVE_WEIGHTS,
+  betaVsSpx, corrBetween, alignedReturns };
