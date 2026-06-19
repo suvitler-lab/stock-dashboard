@@ -47,3 +47,22 @@ CREATE TABLE IF NOT EXISTS decision_journal (
 );
 
 CREATE INDEX IF NOT EXISTS idx_dj_symbol ON decision_journal(symbol);
+
+-- Conflict Resolution log — บันทึก verdict รายวัน เพื่อวัด calibration ทีหลัง (join กับ signal_history)
+-- "verdict ที่วัดความแม่นไม่ได้ = ความเชื่อ ไม่ใช่ edge" — ต้อง log ตั้งแต่วันแรก
+CREATE TABLE IF NOT EXISTS resolution_log (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts_date        TEXT NOT NULL,         -- YYYY-MM-DD (เวลาไทย)
+  ts_iso         TEXT NOT NULL,
+  symbol         TEXT NOT NULL,
+  status         TEXT,                  -- conflict/review
+  verdict        TEXT,                  -- BUY เล็ก/WAIT/AVOID/HOLD/TRIM
+  score          REAL,                  -- คะแนนรวม 0-100
+  engine_stance  TEXT,
+  thesis_stance  TEXT,
+  regime         TEXT,
+  price          REAL,                  -- ราคา ณ ตอน verdict (วัดผลทีหลัง)
+  UNIQUE(ts_date, symbol)               -- idempotent กัน cron/refresh ซ้ำวันเดียว
+);
+
+CREATE INDEX IF NOT EXISTS idx_rl_symbol ON resolution_log(symbol, ts_date);

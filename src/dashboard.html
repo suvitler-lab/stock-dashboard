@@ -591,19 +591,34 @@ function CommandCenter({decide,posWatch,perf,tstats,defense,scenario,consensus,o
       })()}
       {consensus&&(consensus.conflicts>0||consensus.reviews>0)&&(()=>{
         const CC=consensus.conflicts>0?"#ef4444":"#f59e0b";
+        const TONE={success:"#22c55e",info:"#3b82f6",warn:"#f59e0b",danger:"#ef4444"};
+        const ta=consensus.topAction;
         return (
           <div style={{margin:"4px 0 10px",border:"1px solid "+CC,borderLeft:"4px solid "+CC,borderRadius:10,padding:"10px 13px",background:"rgba(255,255,255,0.02)"}}>
             <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-              <b style={{color:CC,fontSize:15}}>🔍 สัญญาณขัดกัน — ควรรีวิว</b>
+              <b style={{color:CC,fontSize:15}}>🔍 Conflict Resolution — ตัดสินให้ + ขนาดไม้</b>
               <span className="cc-dim" style={{fontSize:12}}>· ขัดแรง {consensus.conflicts} · รอตรวจ {consensus.reviews}</span>
             </div>
-            <div style={{fontSize:11.5,marginTop:4,color:"var(--dim)"}}>เทียบ engine · thesis(AI) · invalidation · defense — จุดที่ไม่ตรงกัน (คลิกดูรายตัว)</div>
-            {consensus.items.slice(0,6).map(i=>(
+            {ta&&<div style={{fontSize:12.5,marginTop:6,padding:"6px 10px",background:"rgba(255,255,255,0.04)",borderRadius:8}}>📌 <b>วันนี้ทำอย่างเดียวพอ:</b> {ta.symbol} → <b style={{color:TONE.danger}}>{ta.verdict}</b> ({ta.size}) · score {ta.score}</div>}
+            {consensus.themeClusters&&consensus.themeClusters.length>0&&<div style={{fontSize:11.5,marginTop:5,color:"var(--dim)"}}>🔗 ขัดในธีมเดียวกัน: {consensus.themeClusters.map(c=>c.theme+" "+c.count+" ตัว").join(" · ")} — แต่ละธีม = เดิมพันก้อนเดียว (อย่านับ conviction ซ้ำ)</div>}
+            <div style={{fontSize:11,marginTop:6,marginBottom:2,color:"var(--dim)"}}>verdict · ขนาด · score (5 ชั้น: เทคนิค/พื้นฐาน/มาโคร/ฟิต/เสี่ยง)</div>
+            {consensus.items.slice(0,8).map(i=>{
+              const tc=TONE[i.tone]||"#888";
+              return (
               <div key={i.symbol} className="cc-item click" onClick={()=>onPick&&onPick(i.symbol)} title="คลิกดูรายละเอียด">
-                <div className="cc-it-t"><b>{i.symbol}</b> <span style={{fontSize:11,fontWeight:700,color:i.status==="conflict"?"#f87171":"#f59e0b"}}>{i.status==="conflict"?"ขัดแรง":"รอตรวจ"}</span></div>
+                <div className="cc-it-t" style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+                  <b>{i.symbol}</b>
+                  <span style={{fontSize:11.5,fontWeight:700,padding:"1px 7px",borderRadius:6,background:tc+"22",color:tc}}>{i.verdict}</span>
+                  <span className="cc-dim" style={{fontSize:11}}>{i.size}</span>
+                  {i.rr!=null&&i.rr>0&&<span className="cc-dim" style={{fontSize:11}}>· RR {i.rr}:1</span>}
+                  <span style={{marginLeft:"auto",fontSize:12,fontWeight:600,color:tc}}>{i.score}</span>
+                </div>
                 <div className="cc-sub">{i.flags.map(f=>f.msg).join(" · ")}</div>
+                {i.layers&&<div className="cc-sub" style={{fontSize:10.5,color:"var(--dim)",fontFamily:"var(--mono,monospace)"}}>เทคนิค {i.layers.tech} · พื้นฐาน {i.layers.fund} · มาโคร {i.layers.macro} · ฟิต {i.layers.fit} · เสี่ยง {i.layers.risk}</div>}
               </div>
-            ))}
+              );
+            })}
+            <div style={{fontSize:10.5,marginTop:6,color:"var(--dim)"}}>พื้นฐาน = ชั้นอ่อนสุด (thesis AI) ถ่วงน้ำหนักน้อยใน risk-on · verdict = คำตัดสินเอนเอียง ไม่ใช่คำสั่งซื้อ</div>
           </div>
         );
       })()}

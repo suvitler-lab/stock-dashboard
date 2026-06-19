@@ -2302,8 +2302,9 @@ async function runDailyCron(env) {
       await sendTelegram(env, `ℹ️ <b>Data fallback ทำงาน</b>\nYahoo ดึงไม่ได้ — snapshot วันนี้ใช้ <b>Stooq</b> (${snap.via}) แทน · ระบบยังทำงานปกติ แต่เช็ค Yahoo ด้วย`).catch(() => {});
     }
     const alert = await runSurpriseAlert(env).catch(e => ({ ok: false, error: e && e.message }));
-    await pingHeartbeat(env, true, summary + (alert && alert.sent ? ' · alert sent' : (alert && alert.error ? ' · alert ERR: ' + alert.error : '')));
-    return { ok: true, ...snap, alert };
+    const reslog = await logResolutions(env).catch(e => ({ ok: false, error: e && e.message }));   // B — log verdict รายวัน → calibration
+    await pingHeartbeat(env, true, summary + (alert && alert.sent ? ' · alert sent' : (alert && alert.error ? ' · alert ERR: ' + alert.error : '')) + (reslog && reslog.logged ? ` · resolution ${reslog.logged}` : ''));
+    return { ok: true, ...snap, alert, reslog };
   } catch (e) {
     const msg = (e && e.message) || String(e);
     console.error('daily cron:', msg);
@@ -2623,17 +2624,62 @@ function reconcile(x) {
   const status = flags.some(f => f.sev === 'conflict') ? 'conflict' : flags.length ? 'review' : 'agree';
   return { status, flags };
 }
+
+// ---------- CONFLICT RESOLUTION — verdict + size (เปลี่ยน "ขัดกัน" → "ตัดสินให้ + ขนาด") ----------
+// 5 ชั้น 0-100 จาก signal จริง (M33-style) · fundamental = ชั้นอ่อนสุด (thesis+flags) → ถ่วงน้ำหนักน้อยใน risk-on
+function resolveLayers(x) {
+  const clamp = v => Math.max(0, Math.min(100, Math.round(v)));
+  const L = s => String(s || '').toLowerCase();
+  const tech = x.conviction != null ? x.conviction : 50;                       // engine conviction = ของจริง แม่นสุด
+  const fundBase = { buy: 75, core: 70, hold: 55, wait: 50, reduce: 42, avoid: 28, sell: 22 }[L(x.thesisStance)];
+  let fund = (fundBase != null ? fundBase : 50) - (x.fundFlagsCount || 0) * 8;  // soft layer — ใส่ assumption
+  const macro = { 'risk-on': 70, neutral: 55, 'risk-off': 35 }[x.regime] != null ? { 'risk-on': 70, neutral: 55, 'risk-off': 35 }[x.regime] : 55;
+  const maxW = x.maxWeight || 15;
+  let fit = x.weight != null ? clamp(100 - (x.weight / maxW) * 60) : 60;        // underweight=สูง · =เพดาน=40 · เกิน=ต่ำ
+  if (x.themeConc) fit -= 15;                                                   // กระจุก theme เดียว = หักเพิ่ม (C)
+  let risk = x.rr != null ? (x.rr >= 3 ? 85 : x.rr >= 2 ? 70 : x.rr >= 1.5 ? 55 : x.rr >= 1 ? 40 : 25) : 50;
+  if (x.invStatus === 'breached') risk -= 25; else if (x.invStatus === 'near') risk -= 10;
+  if (x.beta != null && x.beta > 2) risk -= 8;
+  return { tech: clamp(tech), fund: clamp(fund), macro: clamp(macro), fit: clamp(fit), risk: clamp(risk) };
+}
+// E — ถ่วงน้ำหนักตาม regime (สืบทอดปรัชญา CONV_WEIGHTS · risk-off เน้น fundamental/risk · risk-on เน้น technical)
+const RESOLVE_WEIGHTS = {
+  'risk-on':  { tech: 1.3, fund: 0.8, macro: 1.0, fit: 1.0, risk: 0.9 },
+  'neutral':  { tech: 1.0, fund: 1.0, macro: 1.0, fit: 1.0, risk: 1.0 },
+  'risk-off': { tech: 0.9, fund: 1.2, macro: 1.1, fit: 1.0, risk: 1.3 },
+};
+function resolveScore(layers, regime) {
+  const W = RESOLVE_WEIGHTS[regime] || RESOLVE_WEIGHTS.neutral;
+  let ws = 0, vs = 0;
+  for (const k of ['tech', 'fund', 'macro', 'fit', 'risk']) { ws += W[k]; vs += W[k] * layers[k]; }
+  return Math.round(vs / ws);
+}
+// A — verdict + ขนาดไม้ จาก score + บริบท (held winner=reduce path · momentum ใหม่=avoid path)
+function resolveVerdict(score, ctx) {
+  const t = String((ctx && ctx.thesisStance) || '').toLowerCase();
+  const soft = t === 'reduce', hard = t === 'avoid' || t === 'sell';
+  if (ctx && ctx.held) {                                   // ถืออยู่ → ตัดสิน "ลด/คง" ไม่ใช่ "เข้าใหม่"
+    if (hard) return score >= 60 ? { verdict: 'HOLD ระวัง', size: 'คงไว้ จับตาใกล้ชิด', tone: 'warn' } : { verdict: 'REDUCE', size: 'ลด/ทยอยออก', tone: 'danger' };
+    if (soft) return score >= 60 ? { verdict: 'HOLD', size: 'คงไว้', tone: 'info' } : { verdict: 'TRIM', size: 'ลด ~30% เก็บ runner', tone: 'warn' };
+  }
+  if (score >= 70) return { verdict: 'BUY เล็ก', size: (ctx && ctx.borderline) ? '¼ ไม้' : '½ ไม้', tone: 'success' };
+  if (score >= 55) return { verdict: 'WAIT', size: 'ยังไม่เข้า', tone: 'warn' };
+  if (score >= 40) return { verdict: 'หลีกเลี่ยงเพิ่ม', size: 'ไม่เพิ่ม', tone: 'warn' };
+  return { verdict: 'AVOID', size: 'ไม่เข้า', tone: 'danger' };
+}
+
 async function computeConsensus(env) {
-  const [dec, posWatch] = await Promise.all([
+  const [dec, posWatch, port] = await Promise.all([
     computeDecision(env).catch(() => null),
     computePositionWatch(env).catch(() => null),
+    computePortfolio(env).catch(() => null),
   ]);
   if (!dec || dec.error) return { ok: false, error: (dec && dec.error) || 'decision engine error' };
+  const regime = dec.regime.regime;
   const defense = defenseAssess(dec.regime);
   // thesis stance จาก cache (อ่านตรง ไม่ trigger Gemini → ไม่เผา quota)
   const thesisStance = {};
   try { const raw = await env.WATCHLIST.get('thesisCache'); if (raw) { const c = JSON.parse(raw); (((c.data && c.data.theses) || c.theses) || []).forEach(t => { if (t && t.symbol) thesisStance[String(t.symbol).toUpperCase()] = t.stance; }); } } catch (e) {}
-  // invalidation status + ความชิด จาก posWatch
   const invMap = {};
   ((posWatch && posWatch.positions) || []).forEach(p => {
     let tightPct = null;
@@ -2641,28 +2687,76 @@ async function computeConsensus(env) {
       tightPct = +(((p.price - p.invalidationPrice) / p.price) * 100).toFixed(1);
     invMap[String(p.symbol).toUpperCase()] = { status: p.status, tightPct };
   });
+  const weightMap = {}, heldSet = new Set();
+  if (port && port.positions) port.positions.forEach(p => { if (p.ok) { weightMap[p.symbol] = p.weight; heldSet.add(p.symbol); } });
   const engineMap = {};
   [...(dec.candidates || []), ...(dec.core || [])].forEach(c => { engineMap[String(c.symbol).toUpperCase()] = c; });
-  // ตรวจ: ตัวที่ถืออยู่ (posWatch) + buy candidates (ที่ระบบจะเข้า)
   const symbols = new Set([...Object.keys(invMap), ...(dec.candidates || []).filter(c => c.stance === 'buy').map(c => String(c.symbol).toUpperCase())]);
+  // C — นับ conflict ต่อ theme (รวมเดิมพันที่ correlate เป็นก้อนเดียว)
+  const themeCount = {};
+  symbols.forEach(sym => { const th = themeOf(sym); if (th) themeCount[th] = (themeCount[th] || 0) + 1; });
+  const rr = c => (c && c.tp > 0 && c.sl > 0 && c.price > 0 && c.price > c.sl) ? +(((c.tp - c.price) / (c.price - c.sl))).toFixed(1) : null;
   const items = [];
   symbols.forEach(sym => {
     const c = engineMap[sym] || {};
     const inv = invMap[sym] || {};
+    const th = thesisStance[sym] || null;
     const r = reconcile({
-      engineStance: c.stance, engineSignal: c.signal, thesisStance: thesisStance[sym] || null,
+      engineStance: c.stance, engineSignal: c.signal, thesisStance: th,
       invStatus: inv.status, invTightPct: inv.tightPct, defenseLevel: defense.level, borderline: !!c.borderline,
     });
-    if (r.status !== 'agree')
-      items.push({ symbol: sym, status: r.status, flags: r.flags, engineSignal: c.signal || null, engineStance: c.stance || null, thesisStance: thesisStance[sym] || null, invStatus: inv.status || null });
+    if (r.status === 'agree') return;
+    const theme = themeOf(sym);
+    const themeConc = theme && themeCount[theme] >= 2;
+    const rrv = rr(c);
+    const layers = resolveLayers({
+      conviction: c.conviction, thesisStance: th, fundFlagsCount: (c.fundFlags || []).length, regime,
+      weight: weightMap[sym], maxWeight: 15, themeConc, rr: rrv, beta: c.beta1y, invStatus: inv.status,
+    });
+    const score = resolveScore(layers, regime);
+    const v = resolveVerdict(score, { held: heldSet.has(sym), thesisStance: th, borderline: !!c.borderline });
+    items.push({
+      symbol: sym, status: r.status, flags: r.flags,
+      engineSignal: c.signal || null, engineStance: c.stance || null, thesisStance: th, invStatus: inv.status || null,
+      layers, score, verdict: v.verdict, size: v.size, tone: v.tone, rr: rrv, theme: theme || null, themeConc, price: c.price != null ? c.price : null,
+    });
   });
-  items.sort((a, b) => (a.status === b.status) ? 0 : (a.status === 'conflict' ? -1 : 1));
+  // priority: breached/conflict score ต่ำสุดก่อน (อันตรายสุด)
+  const sev = i => (i.status === 'conflict' ? 0 : 1);
+  items.sort((a, b) => sev(a) - sev(b) || a.score - b.score);
+  // C — theme cluster summary: หุ้นที่ขัด ≥2 ตัวในธีมเดียว = เดิมพันก้อนเดียว
+  const byTheme = {};
+  items.forEach(i => { if (i.theme) byTheme[i.theme] = (byTheme[i.theme] || 0) + 1; });
+  const clusters = Object.entries(byTheme).filter(([, n]) => n >= 2).map(([theme, count]) => ({ theme, count }));
+  // F — วันนี้ทำอย่างเดียวพอ: ตัวที่ priority สูงสุด (อันตราย/score ต่ำสุด)
+  const top = items[0] || null;
+  const topAction = top ? { symbol: top.symbol, verdict: top.verdict, size: top.size, why: (top.flags[0] && top.flags[0].msg) || '', score: top.score } : null;
   return {
-    ok: true, updated: new Date().toISOString(), regime: dec.regime.regime, defenseLevel: defense.level,
+    ok: true, updated: new Date().toISOString(), regime, defenseLevel: defense.level,
     conflicts: items.filter(i => i.status === 'conflict').length, reviews: items.filter(i => i.status === 'review').length,
-    items,
-    note: 'Consensus Detector (deterministic) — จับจุดที่ engine/thesis/invalidation/defense ขัดกัน · ไม่ใช่คำแนะนำการลงทุน',
+    themeClusters: clusters, topAction, items,
+    assumptions: [
+      'คะแนน 5 ชั้น: technical=conviction จริง · fundamental=thesis(AI)+flags (ชั้นอ่อนสุด ถ่วงน้ำหนักน้อยใน risk-on) · macro=regime · fit=น้ำหนัก/theme · risk=RR/invalidation/beta',
+      'verdict/ขนาดไม้เป็น "คำตัดสินเอนเอียง" จากกฎ deterministic — ไม่ใช่คำสั่งซื้อ ตรวจ entry zone + งบ ก่อนเข้าจริงเสมอ',
+      'หุ้นที่ขัดในธีมเดียวกัน = เดิมพันก้อนเดียว (ระวังนับ conviction ซ้ำ)',
+    ],
+    note: 'Conflict Resolution (deterministic) — engine/thesis/invalidation/defense → verdict+size · ไม่ใช่คำแนะนำการลงทุน',
   };
+}
+
+// B — บันทึก verdict รายวันลง D1 → วัด calibration ทีหลัง (เรียกจาก daily cron · idempotent)
+async function logResolutions(env) {
+  if (!env.JOURNAL) return { ok: false, error: 'no D1' };
+  const r = await computeConsensus(env).catch(e => ({ ok: false, error: e && e.message }));
+  if (!r.ok) return { ok: false, error: r.error };
+  if (!r.items || !r.items.length) return { ok: true, logged: 0 };
+  await env.JOURNAL.prepare(`CREATE TABLE IF NOT EXISTS resolution_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts_date TEXT NOT NULL, ts_iso TEXT NOT NULL, symbol TEXT NOT NULL, status TEXT, verdict TEXT, score REAL, engine_stance TEXT, thesis_stance TEXT, regime TEXT, price REAL, UNIQUE(ts_date, symbol))`).run().catch(() => {});
+  const date = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
+  const ts = new Date().toISOString();
+  const stmt = env.JOURNAL.prepare(`INSERT OR IGNORE INTO resolution_log (ts_date, ts_iso, symbol, status, verdict, score, engine_stance, thesis_stance, regime, price) VALUES (?,?,?,?,?,?,?,?,?,?)`);
+  const batch = r.items.map(i => stmt.bind(date, ts, i.symbol, i.status, i.verdict, i.score, i.engineStance, i.thesisStance, r.regime, i.price));
+  await env.JOURNAL.batch(batch).catch(() => {});
+  return { ok: true, logged: batch.length, date };
 }
 
 // /defense — HTML สรุป Portfolio Defense (white card style เหมือน /risk /portfolio)
@@ -2917,6 +3011,21 @@ export default {
     if (url.pathname === '/api/consensus') {
       const r = await computeConsensus(env).catch(e => ({ ok: false, error: e && e.message }));
       return new Response(JSON.stringify(r, null, 2), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+    }
+    // /api/log-resolutions — บังคับ log verdict วันนี้ทันที (ทดสอบ B · cron ทำให้อยู่แล้ว) · gated (เขียน D1)
+    if (url.pathname === '/api/log-resolutions') {
+      const gate = requireAdmin(request, env, url); if (gate) return gate;
+      const r = await logResolutions(env).catch(e => ({ ok: false, error: e && e.message }));
+      return new Response(JSON.stringify(r), { headers: { ...CORS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+    }
+    // /api/resolution-log — อ่าน log verdict ย้อนหลัง (รากฐาน calibration Tier B) · gated (เปิดข้อมูลดิบ)
+    if (url.pathname === '/api/resolution-log') {
+      const gate = requireAdmin(request, env, url); if (gate) return gate;
+      if (!env.JOURNAL) return new Response(JSON.stringify({ ok: false, error: 'no D1' }), { headers: { ...CORS, 'Content-Type': 'application/json' } });
+      const days = Math.min(parseInt(url.searchParams.get('days') || '90', 10) || 90, 3650);
+      const since = new Date(Date.now() - days * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
+      const r = await env.JOURNAL.prepare(`SELECT ts_date, symbol, status, verdict, score, engine_stance, thesis_stance, regime, price FROM resolution_log WHERE ts_date >= ? ORDER BY ts_date DESC, score ASC`).bind(since).all().catch(e => ({ error: e && e.message }));
+      return new Response(JSON.stringify({ ok: !r.error, count: (r.results || []).length, rows: r.results || [], error: r.error }, null, 2), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
     }
     // /defense — M36 HTML (ดู/ก๊อปในเบราว์เซอร์ + ให้ AI browse)
     if (url.pathname === '/defense') return handleDefense(env);
@@ -3252,4 +3361,5 @@ export default {
 // Named exports สำหรับ unit test (node --test) — pure functions ล้วน · Wrangler ใช้แค่ default ไม่กระทบ deploy
 export { convictionScore, labelFromConviction, buyThreshFor, positionSize, corrPenaltyFor, CONV_WEIGHTS,
   defenseAssess, defenseHeadroom, DEFENSE_LEVELS, allocationRank, scenarioOutcome, defaultScenarios,
-  invalidationStatus, INVALIDATION_BUFFER_PCT, signalStability, SIGNAL_BORDERLINE_BAND, reconcile };
+  invalidationStatus, INVALIDATION_BUFFER_PCT, signalStability, SIGNAL_BORDERLINE_BAND, reconcile,
+  resolveLayers, resolveScore, resolveVerdict, RESOLVE_WEIGHTS };

@@ -2,7 +2,7 @@
 // เลขพวกนี้ตัดสินใจเรื่องเงิน (defense/allocation/scenario) → กัน regression เงียบ
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defenseAssess, allocationRank, scenarioOutcome, defaultScenarios, invalidationStatus, INVALIDATION_BUFFER_PCT, signalStability, reconcile, buyThreshFor } from '../worker.js';
+import { defenseAssess, allocationRank, scenarioOutcome, defaultScenarios, invalidationStatus, INVALIDATION_BUFFER_PCT, signalStability, reconcile, buyThreshFor, resolveLayers, resolveScore, resolveVerdict } from '../worker.js';
 
 // ============ M36 — defenseAssess ============
 const HEALTHY = { aboveEma200Pct: 3, ndxAboveEma200Pct: 4, vix: 15, creditOk: true, breadthOk: true };
@@ -251,4 +251,55 @@ test('reconcile: borderline + near invalidation = review (สัญญาณเ�
 test('reconcile: ไม่มี thesis (cache ว่าง) ไม่ทำให้ conflict ผิด', () => {
   const r = reconcile({ engineStance: 'buy', thesisStance: null, invStatus: 'ok', defenseLevel: 0 });
   assert.equal(r.status, 'agree');
+});
+
+// ============ Conflict Resolution — resolveLayers / resolveScore / resolveVerdict ============
+test('resolveLayers: technical=conviction · fundamental ต่ำเมื่อ thesis avoid', () => {
+  const L = resolveLayers({ conviction: 90, thesisStance: 'avoid', regime: 'neutral', weight: 5, rr: 2 });
+  assert.equal(L.tech, 90);
+  assert.ok(L.fund < 35, 'avoid → fund ต่ำ');
+});
+
+test('resolveLayers: fundFlags หัก fundamental · overweight หัก fit · theme กระจุกหัก fit', () => {
+  const base = resolveLayers({ conviction: 70, thesisStance: 'buy', regime: 'neutral', weight: 3, rr: 2 });
+  const flagged = resolveLayers({ conviction: 70, thesisStance: 'buy', regime: 'neutral', weight: 3, rr: 2, fundFlagsCount: 2 });
+  assert.ok(flagged.fund < base.fund, 'fundFlags ต้องหัก fund');
+  const over = resolveLayers({ conviction: 70, thesisStance: 'buy', regime: 'neutral', weight: 15, rr: 2 });
+  assert.ok(over.fit < base.fit, 'overweight ต้องหัก fit');
+  const themed = resolveLayers({ conviction: 70, thesisStance: 'buy', regime: 'neutral', weight: 3, rr: 2, themeConc: true });
+  assert.ok(themed.fit < base.fit, 'theme กระจุกต้องหัก fit');
+});
+
+test('resolveLayers: invalidation breached + RR ติดลบ → risk ต่ำ', () => {
+  const L = resolveLayers({ conviction: 70, thesisStance: 'wait', regime: 'neutral', weight: 5, rr: 0.5, invStatus: 'breached' });
+  assert.ok(L.risk < 25, 'risk='+L.risk);
+});
+
+test('resolveScore: risk-off เน้น fundamental/risk → หุ้น tech แรงพื้นฐานอ่อน คะแนนต่ำกว่า risk-on', () => {
+  const layers = { tech: 90, fund: 30, macro: 50, fit: 60, risk: 40 };
+  const on = resolveScore(layers, 'risk-on');
+  const off = resolveScore(layers, 'risk-off');
+  assert.ok(on > off, `risk-on=${on} ควร > risk-off=${off}`);
+});
+
+test('resolveVerdict: score สูง = BUY เล็ก · กลาง = WAIT · ต่ำ = AVOID', () => {
+  assert.equal(resolveVerdict(75, {}).verdict, 'BUY เล็ก');
+  assert.equal(resolveVerdict(60, {}).verdict, 'WAIT');
+  assert.equal(resolveVerdict(30, {}).verdict, 'AVOID');
+});
+
+test('resolveVerdict: borderline → ลดขนาดไม้ (¼ แทน ½)', () => {
+  assert.equal(resolveVerdict(75, { borderline: false }).size, '½ ไม้');
+  assert.equal(resolveVerdict(75, { borderline: true }).size, '¼ ไม้');
+});
+
+test('resolveVerdict: held + thesis reduce → HOLD (score สูง) / TRIM (score ต่ำ)', () => {
+  assert.equal(resolveVerdict(70, { held: true, thesisStance: 'reduce' }).verdict, 'HOLD');
+  assert.equal(resolveVerdict(45, { held: true, thesisStance: 'reduce' }).verdict, 'TRIM');
+});
+
+test('resolveVerdict: held + thesis sell/avoid score ต่ำ → REDUCE (ไม่ใช่ "หลีกเลี่ยงเพิ่ม")', () => {
+  assert.equal(resolveVerdict(44, { held: true, thesisStance: 'sell' }).verdict, 'REDUCE');
+  assert.equal(resolveVerdict(44, { held: true, thesisStance: 'avoid' }).verdict, 'REDUCE');
+  assert.equal(resolveVerdict(50, { held: false, thesisStance: 'sell' }).verdict, 'หลีกเลี่ยงเพิ่ม'); // ไม่ถือ = แค่ไม่เพิ่ม
 });
