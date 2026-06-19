@@ -19,6 +19,22 @@ function qtyFmt(x) {
 // format ทศนิยม (ใช้ใน surprise/telegram) — d ตำแหน่ง (default 2)
 function f2(x, d = 2) { return (x == null || isNaN(x)) ? '—' : (+x).toFixed(d); }
 
+// request-burst memo (TTL สั้น) — dedupe การดึงซ้ำตอนโหลด dashboard · หลาย endpoint ใช้ portfolio/regime/watchlist
+// ชุดเดียวกัน → computePortfolio เคยถูกดึง ~3-5 ครั้ง/โหลด · ปลอดภัยเพราะเป็นข้อมูลตลาด/พอร์ตผู้ใช้คนเดียว
+// (ไม่ใช่ข้อมูลเฉพาะ request) · TTL 20s = สดพอ + ลด Yahoo subrequest มาก
+const _memo = new Map();
+// cache "promise" ไม่ใช่ value → callers ที่ยิงพร้อมกัน (Promise.all ใน /api/dashboard) ได้ promise เดียวกัน = dedupe จริง
+function memo(key, ttlMs, fn) {
+  const now = Date.now();
+  const h = _memo.get(key);
+  if (h && h.exp > now) return h.value;
+  const p = Promise.resolve().then(fn);
+  _memo.set(key, { value: p, exp: now + ttlMs });
+  p.catch(() => _memo.delete(key));   // error -> ไม่ cache (ลองใหม่ได้)
+  if (_memo.size > 50) for (const [k, v] of _memo) if (v.exp <= now) _memo.delete(k);
+  return p;
+}
+
 async function yahooDailyRaw(symbol, range, interval) {
   for (const h of YHOSTS) {
     try {
@@ -477,7 +493,10 @@ function fundamentalFlags(f) {
 
 // คำนวณข้อมูล watchlist + indicator + signal (ใช้ร่วมทั้ง /api/data JSON และ /report HTML)
 // opts.options=true → ดึง implied move (ช้า ~22 call Yahoo) · default ปิด ให้ endpoint หนักเร็วขึ้น
-async function computeWatchlistData(env, opts = {}) {
+function computeWatchlistData(env, opts = {}) {
+  return memo('wd:' + (opts.lite ? 1 : 0) + ':' + (opts.cached ? 1 : 0), 20000, () => _computeWatchlistDataRaw(env, opts));
+}
+async function _computeWatchlistDataRaw(env, opts = {}) {
   const wantOptions = !!opts.options;
   // cached: อ่าน fullData ที่ cron (*/15) เขียนไว้ ถ้าสด <20 นาที → คืนเลย (เลี่ยง recompute 44 fetch)
   if (opts.cached) {
@@ -686,7 +705,10 @@ async function handleText(env) {
 }
 
 // คำนวณพอร์ต — ดึง positions จาก KV + ราคาสด → สรุปมูลค่า/กำไรขาดทุน (รวม + รายตัว)
-async function computePortfolio(env) {
+function computePortfolio(env) {
+  return memo('portfolio', 20000, () => _computePortfolioRaw(env));
+}
+async function _computePortfolioRaw(env) {
   let arr = [];
   try { const raw = await env.WATCHLIST.get('positions'); if (raw) arr = JSON.parse(raw); } catch (e) {}
   if (!Array.isArray(arr)) arr = [];
@@ -1556,7 +1578,10 @@ async function computeRegimeRaw() {
 }
 
 // hysteresis — ต้องเห็น raw ใหม่ใน ≥2 วันต่างกันก่อน commit (กัน whipsaw) · เก็บ state ใน KV
-async function getRegime(env) {
+function getRegime(env) {
+  return memo('regime', 20000, () => _getRegimeRaw(env));
+}
+async function _getRegimeRaw(env) {
   const cur = await computeRegimeRaw();
   if (!cur.ok) return { regime: 'unknown', ...cur };
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
@@ -2981,6 +3006,19 @@ export default {
     // /api/riskconfig — ตั้ง/อ่านเงินพอร์ต + %เสี่ยงต่อไม้ (สำหรับ position sizing)
     if (url.pathname === '/api/riskconfig') {
       return handleKvJson(request, env, 'riskConfig', x => x && typeof x === 'object' && !Array.isArray(x));
+    }
+
+    // /api/dashboard — aggregator: คำนวณทุกอย่างที่หน้า dashboard ใช้ในครั้งเดียว
+    // memo dedupe portfolio/regime/watchlist (เคย recompute ~5x/โหลด) + ลด round-trip 7→1
+    if (url.pathname === '/api/dashboard') {
+      const safe = p => p.then(v => v).catch(e => ({ error: e && e.message }));
+      const [decide, posWatch, defense, scenario, consensus, perf, tstats] = await Promise.all([
+        safe(computeDecision(env)), safe(computePositionWatch(env)), safe(computeDefense(env)),
+        safe(computeScenario(env, {})), safe(computeConsensus(env)), safe(computePerformance(env)), safe(computeTradeStats(env)),
+      ]);
+      let riskConfig = null;
+      try { const raw = await env.WATCHLIST.get('riskConfig'); if (raw) riskConfig = JSON.parse(raw); } catch (e) {}
+      return new Response(JSON.stringify({ updated: new Date().toISOString(), decide, posWatch, defense, scenario, consensus, perf, tstats, riskConfig }), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
     }
 
     // /api/decide — Decision Engine JSON (Phase 2)
