@@ -1457,7 +1457,7 @@ async function computePerformance(env) {
   // group ตาม symbol → array เรียงตามวันที่ (snapshot รายวันทำการอยู่แล้ว → index = trading day)
   const bySym = {};
   for (const r of rows) (bySym[r.symbol] = bySym[r.symbol] || []).push(r);
-  const HZ = [5, 10, 20];
+  const HZ = [3, 5, 10, 20];   // h=3 = "early read" (ดูว่า pipeline ทำงาน) · h=5/10/20 = ของจริง · ต้องมี snapshot h+1 วัน
   const COST = 0.1;   // ต้นทุน round-trip โดยประมาณ % (commission+spread+impact) — หักจาก excess เพื่อดู edge สุทธิ
   // ทุก datapoint: {h, sig, ret, exc, regime, conviction} — รวมไว้แล้วค่อย aggregate หลายแบบ
   const recs = [];
@@ -2971,25 +2971,35 @@ export default {
       const f = (x) => x == null ? '—' : (x > 0 ? '+' : '') + Number(x).toFixed(2);
       const col = x => x == null ? '#666' : x > 0 ? '#16a34a' : x < 0 ? '#dc2626' : '#666';
       let body;
+      const dd = (d.ok && d.symbols) ? Math.round(d.snapshots / d.symbols) : 0;   // จำนวนวันทำการที่เก็บได้
       if (!d.ok) {
         body = `<p>ยังไม่มีข้อมูล: ${d.error || 'unknown'}</p>`;
-      } else if (d.dataPoints === 0) {
-        body = `<div class=info><b>กำลังสะสมข้อมูล</b><br>มี snapshot ${d.snapshots} แถว (${d.symbols} หุ้น)${d.dateRange ? ` · ${d.dateRange.from} → ${d.dateRange.to}` : ''}<br>
-          ต้องรอ <b>≥5 วันทำการ</b> จึงเริ่มวัดผล horizon แรกได้ · ตอนนี้ระบบเก็บ snapshot รายวันอัตโนมัติ (05:00 น.ไทย) แล้ว</div>`;
+      } else if (d.snapshots < 4) {
+        body = `<div class=info><b>กำลังสะสมข้อมูล</b><br>เก็บ snapshot ได้ <b>${dd} วันทำการ</b> (${d.snapshots} แถว · ${d.symbols} หุ้น)${d.dateRange ? ` · ${d.dateRange.from} → ${d.dateRange.to}` : ''}<br>
+          horizon X วัน = เทียบ snapshot ห่างกัน X วัน → <b>ต้องมี snapshot X+1 วัน</b> · early read (3 วัน) ต้องมี 4 วัน · ระบบเก็บอัตโนมัติ 05:00 น.ไทย</div>`;
       } else {
-        const blocks = [5, 10, 20].map(h => {
+        const hzBlock = (h, early) => {
+          const hh = d.horizons[h] || {};
+          const has = ['BUY', 'HOLD', 'SELL'].some(sig => hh[sig] && hh[sig].n > 0);
+          if (!has) {
+            const left = Math.max(0, (h + 1) - dd);
+            return `<h2>Horizon ${h} วันทำการ</h2><div class=note>⏳ รอข้อมูล — ต้องมี snapshot <b>${h + 1} วัน</b> (มี ${dd}) · ขาดอีก ~${left} วันทำการ</div>`;
+          }
           const rowsH = ['BUY', 'HOLD', 'SELL'].map(sig => {
-            const s = d.horizons[h][sig];
+            const s = hh[sig] || { n: 0 };
             return `<tr><td><b>${sig}</b></td><td class=num>${s.n}</td>
               <td class=num>${s.winRate == null ? '—' : s.winRate + '%'}</td>
               <td class=num style="color:${col(s.beatRate == null ? null : s.beatRate - 50)}">${s.beatRate == null ? '—' : s.beatRate + '%'}</td>
               <td class=num style="color:${col(s.avgReturn)}">${f(s.avgReturn)}%</td>
               <td class=num style="color:${col(s.avgExcess)}">${f(s.avgExcess)}%</td></tr>`;
           }).join('');
-          return `<h2>Horizon ${h} วันทำการ</h2><table><thead><tr><th>สัญญาณ</th><th>n</th><th>หุ้นบวก</th><th>ชนะ SPX</th><th>ผลตอบแทนเฉลี่ย</th><th>ส่วนเกินเหนือตลาด</th></tr></thead><tbody>${rowsH}</tbody></table>`;
-        }).join('');
-        body = `<div class=info>ข้อมูล ${d.dataPoints} จุดวัด · ${d.snapshots} snapshot · ${d.symbols} หุ้น · ${d.dateRange.from} → ${d.dateRange.to}</div>${blocks}
-          <p class=note>💡 <b>ชนะ SPX</b> >50% = signal มี edge เหนือการถือดัชนีเฉย ๆ · <b>ส่วนเกิน</b> คือผลตอบแทนหลังหักตลาด (ค่าจริงที่สำคัญ ไม่ใช่ผลตอบแทนดิบ)</p>`;
+          const warn = early ? `<div class=warn>⚠️ <b>ผลเบื้องต้น (early read)</b> — เก็บแค่ ${dd} วัน = 1 ช่วงเวลา · ดูแค่ว่า "ระบบทำงาน" <b>ยังไม่มีนัยสำคัญทางสถิติ</b> (ต้องสะสมหลายเดือน) อย่าตัดสินใจจากนี้</div>` : '';
+          return `<h2>Horizon ${h} วันทำการ${early ? ' · 🔍 early read' : ''}</h2>${warn}<table><thead><tr><th>สัญญาณ</th><th>n</th><th>หุ้นบวก</th><th>ชนะ SPX</th><th>ผลตอบแทนเฉลี่ย</th><th>ส่วนเกินเหนือตลาด</th></tr></thead><tbody>${rowsH}</tbody></table>`;
+        };
+        const blocks = [3, 5, 10, 20].map(h => hzBlock(h, h === 3)).join('');
+        body = `<div class=info>เก็บ snapshot <b>${dd} วันทำการ</b> (${d.snapshots} แถว · ${d.symbols} หุ้น) · ${d.dateRange.from} → ${d.dateRange.to} · จุดวัด ${d.dataPoints}<br>
+          horizon X วัน = เทียบ snapshot ห่างกัน X วัน → ต้องมี snapshot X+1 วัน · นัยสำคัญจริงต้องสะสมหลายเดือน</div>${blocks}
+          <p class=note>💡 <b>ชนะ SPX</b> >50% = signal มี edge เหนือถือดัชนีเฉยๆ · <b>ส่วนเกิน</b> = ผลหลังหักตลาด (ค่าจริงที่สำคัญ) · early read = sample เล็ก ดูเป็นการทดสอบ pipeline ไม่ใช่ผลจริง</p>`;
       }
       const html = `<!DOCTYPE html><html lang=th><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
         <title>วัดผลสัญญาณย้อนหลัง</title><style>
@@ -2998,6 +3008,7 @@ export default {
         table{border-collapse:collapse;width:100%;font-size:13px}th,td{border:1px solid #e5e7eb;padding:6px 8px;text-align:left}
         th{background:#f9fafb}.num{text-align:right;font-variant-numeric:tabular-nums}
         .info{background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:8px}
+        .warn{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 11px;font-size:12.5px;color:#92400e;margin:4px 0 8px}
         .note{font-size:12px;color:#555;background:#fafafa;border-radius:8px;padding:8px 10px}</style></head>
         <body><h1>📊 วัดผลสัญญาณย้อนหลัง (benchmark-relative)</h1>${body}</body></html>`;
       return new Response(html, { headers: { ...CORS, 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
