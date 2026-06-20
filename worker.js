@@ -3336,6 +3336,8 @@ export default {
     if (url.pathname === '/decide') {
       const d = await computeDecision(env).catch(e => ({ error: e && e.message }));
       if (d.error) return new Response(`<p>error: ${d.error}</p>`, { status: 500, headers: { ...CORS, 'Content-Type': 'text/html; charset=utf-8' } });
+      const cons = await computeConsensus(env).catch(() => null);   // reconcile กับ Conflict Resolution (กัน over-trust engine ล้วน)
+      const resBySym = {}; ((cons && cons.items) || []).forEach(i => { if (i && i.symbol) resBySym[String(i.symbol).toUpperCase()] = i; });
       const esc = s => String(s == null ? '' : s).replace(/[&<>]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
       const f = (x, dg = 2) => (x == null) ? '—' : Number(x).toLocaleString('en-US', { minimumFractionDigits: dg, maximumFractionDigits: dg });
       const rg = d.regime;
@@ -3356,9 +3358,11 @@ export default {
         const sz = c.sizing ? (c.sizing.shares != null
           ? `${f(c.sizing.shares)} หุ้น ($${f(c.sizing.positionValue, 0)} · ${c.sizing.pctOfPort}% พอร์ต)`
           : `stop ${f(c.sizing.stopDist)} (${c.sizing.stopType}) · ตั้ง riskConfig เพื่อคำนวณจำนวนหุ้น`) : '—';
+        const rv = resBySym[String(c.symbol).toUpperCase()];
+        const rvHtml = rv ? ` <span style="color:${rv.status === 'conflict' ? '#dc2626' : '#d97706'};font-weight:700;font-size:11px" title="Conflict Resolution (เทียบ AI thesis) ค้าน">⚠ ${esc(rv.verdict)}</span>` : '';
         return `<tr><td><b>${esc(c.symbol)}</b><br><span class=n>${esc(c.name)}</span></td>
           <td>${cvBar(c.conviction)}</td>
-          <td>${stanceBadge(c.stance)}<br><span class=rsn>${esc(c.reason)}</span></td>
+          <td>${stanceBadge(c.stance)}${rvHtml}<br><span class=rsn>${esc(c.reason)}</span></td>
           <td class=num>$${f(c.price)}</td>
           <td><span class=mini>RSI ${f(c.rsi, 0)} · CMF ${f(c.cmf, 2)} · RS ${c.rsVsSpx >= 0 ? '+' : ''}${f(c.rsVsSpx)}</span></td>
           <td><span class=mini>${sz}</span>${fl}</td></tr>`;
@@ -3390,6 +3394,7 @@ export default {
             (h.warn ? `<br>⚠️ ${esc(h.warn)}` : '') +
             (h.correlatedClusters && h.correlatedClusters.length ? `<br>🔗 ไม้ที่สัมพันธ์สูง (เสี่ยงซ้ำ): ${esc(h.correlatedClusters.join(', '))}` : '') + `</div>`;
         })()}
+        <div class=info>💡 นี่คือ <b>engine ล้วน</b> (deterministic · ยังไม่รวม AI thesis) · <b style="color:#dc2626">⚠ verdict</b> = Conflict Resolution (เทียบ AI) ค้านสัญญาณนั้น → อย่าเชื่อ "ซื้อได้" ถ้ามี ⚠ · ดูเต็มในแดชบอร์ด${cons ? ` (ขัดแรง ${cons.conflicts} · รอตรวจ ${cons.reviews})` : ''}</div>
         <h2>📈 Tactical — เรียงตาม conviction (${d.candidates.length} ตัว)</h2>
         <table><thead><tr><th>หุ้น</th><th>Conviction</th><th>คำแนะนำ</th><th>ราคา</th><th>สัญญาณ</th><th>ขนาดไม้ / ความเสี่ยง</th></tr></thead><tbody>${candRows}</tbody></table>
         ${coreRows ? `<h2>🔵 Core — ถือยาว ไม่ trade ตาม signal</h2><table><tbody>${coreRows}</tbody></table>` : ''}
