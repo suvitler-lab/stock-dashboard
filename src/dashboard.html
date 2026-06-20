@@ -503,11 +503,13 @@ function usMarketStatus(){
 
 /* ============================================================ APP */
 /* ---------- M37 Capital Allocation — เงินใหม่ใส่ตัวไหนก่อน (interactive, แยก component กัน hooks) ---------- */
-function AllocCard(){
+function AllocCard({consensus}){
   const [budget,setBudget]=useState(10000);
   const [res,setRes]=useState(null);
   const [loading,setLoading]=useState(false);
   const f=(x)=>x==null?"—":Number(x).toLocaleString("en-US",{maximumFractionDigits:2});
+  const resBySym={}; ((consensus&&consensus.items)||[]).forEach(i=>{ if(i&&i.symbol) resBySym[String(i.symbol).toUpperCase()]=i; });
+  const TONE={success:"#22c55e",info:"#3b82f6",warn:"#f59e0b",danger:"#ef4444"};
   const run=async()=>{ setLoading(true); try{ const r=await fetch("/api/allocate?budget="+(+budget||0),{cache:"no-store"}).then(x=>x.ok?x.json():null); if(r&&r.ok) setRes(r); }catch(e){} finally{ setLoading(false); } };
   const zlab={in:"ในโซน",near:"ใกล้โซน",above:"เกินโซน","n/a":"—"};
   return (
@@ -519,7 +521,7 @@ function AllocCard(){
       </div>
       {res&&<div style={{marginTop:8}}>
         {res.allocations.length>0
-          ? res.allocations.map(a=>(<div key={a.symbol} style={{display:"flex",gap:8,fontSize:13,padding:"3px 0"}}><b style={{width:56}}>{a.symbol}</b><span>${f(a.usd)}</span><span className="cc-dim">· {f(a.shares)} หุ้น · {zlab[a.zone]||a.zone}</span></div>))
+          ? res.allocations.map(a=>{ const r=resBySym[String(a.symbol).toUpperCase()]; const tc=r?(TONE[r.tone]||"#f59e0b"):null; return (<div key={a.symbol} style={{display:"flex",gap:8,fontSize:13,padding:"3px 0",alignItems:"center"}}><b style={{width:56}}>{a.symbol}</b><span>${f(a.usd)}</span><span className="cc-dim">· {f(a.shares)} หุ้น · {zlab[a.zone]||a.zone}</span>{r&&<span style={{fontSize:10.5,fontWeight:700,padding:"0 6px",borderRadius:5,background:tc+"22",color:tc}} title="Conflict Resolution มีคำเตือนตัวนี้ — ดูการ์ด Conflict Resolution">⚠ {r.verdict}</span>}</div>); })
           : <div className="cc-dim" style={{fontSize:13}}>ไม่มีตัวเข้าเกณฑ์ตอนนี้ — พักเป็นเงินสด</div>}
         {res.toCash>0&&<div style={{fontSize:13,marginTop:3}}>💰 เข้าเงินสด: ${f(res.toCash)}</div>}
         <div style={{fontSize:11,color:"var(--dim)",marginTop:5}}>อันดับจาก conviction จริง · overweight ≥{res.maxWeightPct}% ถูกตัด · เช็ค entry zone ก่อนเข้า · ไม่ใช่คำสั่งซื้อ</div>
@@ -542,6 +544,9 @@ function CommandCenter({decide,posWatch,perf,tstats,defense,scenario,consensus,o
   const dayChg={}; [...(decide.candidates||[]),...(decide.core||[])].forEach(c=>{ if(c&&c.symbol&&c.changePct!=null) dayChg[String(c.symbol).toUpperCase()]=c.changePct; });
   // verdict จาก Conflict Resolution → reconcile กับ "น่าซื้อ" (กันบอกซื้อตัวที่ระบบเองค้าน)
   const resBySym={}; ((consensus&&consensus.items)||[]).forEach(i=>{ if(i&&i.symbol) resBySym[String(i.symbol).toUpperCase()]=i; });
+  // position ที่ถืออยู่ + Resolution บอก "ลด/ออก" (REDUCE/TRIM/HOLD ระวัง) → ควรอยู่ใน "Position ต้องดู" ด้วย (ไม่ใช่แค่หลุด invalidation)
+  const heldSet=new Set(((posWatch&&posWatch.positions)||[]).map(p=>String(p.symbol).toUpperCase()));
+  const resHolds=((consensus&&consensus.items)||[]).filter(i=>heldSet.has(String(i.symbol).toUpperCase())&&/REDUCE|TRIM|ระวัง/.test(i.verdict||""));
   const earn=[...(decide.candidates||[]),...(decide.core||[])]
     .filter(c=>c.earnings&&c.earnings.daysUntil!=null&&c.earnings.daysUntil>=0&&c.earnings.daysUntil<=7)
     .sort((a,b)=>a.earnings.daysUntil-b.earnings.daysUntil);
@@ -658,12 +663,17 @@ function CommandCenter({decide,posWatch,perf,tstats,defense,scenario,consensus,o
             </div>))}
         </div>
         <div className="cc-box">
-          <div className="cc-box-h" style={{color:"var(--down)"}}>📍 Position ต้องดู ({posAlerts.length})</div>
-          {posAlerts.length===0?<div className="cc-empty">ทุก position ปกติ</div>:
-            posAlerts.map(p=>(<div key={p.symbol} className="cc-item click" onClick={()=>onPick&&onPick(p.symbol)} title="คลิกดูรายละเอียด">
+          <div className="cc-box-h" style={{color:"var(--down)"}}>📍 Position ต้องดู ({posAlerts.length+resHolds.length})</div>
+          {(posAlerts.length+resHolds.length)===0?<div className="cc-empty">ทุก position ปกติ (ไม่หลุด invalidation + ไม่มีคำเตือนลด)</div>:<React.Fragment>
+            {posAlerts.map(p=>(<div key={p.symbol} className="cc-item click" onClick={()=>onPick&&onPick(p.symbol)} title="คลิกดูรายละเอียด">
               <div className="cc-it-t"><b>{p.symbol}</b> {dayChg[String(p.symbol).toUpperCase()]!=null&&<span className={dayChg[String(p.symbol).toUpperCase()]>=0?"up":"down"}>วันนี้ {dayChg[String(p.symbol).toUpperCase()]>=0?"+":""}{f(dayChg[String(p.symbol).toUpperCase()])}%</span>} <span className="cc-dim">· P/L <span className={p.plPct>=0?"up":"down"}>{p.plPct>=0?"+":""}{f(p.plPct)}%</span> เทียบทุน</span></div>
               <div className="cc-sub">{p.alert}</div>
             </div>))}
+            {resHolds.filter(r=>!posAlerts.some(p=>String(p.symbol).toUpperCase()===String(r.symbol).toUpperCase())).map(r=>{ const tc=r.status==="conflict"?"#ef4444":"#f59e0b"; return (<div key={"res"+r.symbol} className="cc-item click" onClick={()=>onPick&&onPick(r.symbol)} title="Conflict Resolution แนะให้ลด/ทบทวน">
+              <div className="cc-it-t"><b>{r.symbol}</b> <span style={{fontSize:11,fontWeight:700,color:tc}}>{r.verdict}</span> <span className="cc-dim" style={{fontSize:11}}>· จาก Conflict Resolution</span></div>
+              <div className="cc-sub">{(r.flags&&r.flags[0]&&r.flags[0].msg)||"engine vs thesis ขัดกัน"}</div>
+            </div>); })}
+          </React.Fragment>}
         </div>
         <div className="cc-box">
           <div className="cc-box-h" style={{color:"#f59e0b"}}>📅 เหตุการณ์ใกล้ ({earn.length+econ.length})</div>
@@ -698,7 +708,7 @@ function CommandCenter({decide,posWatch,perf,tstats,defense,scenario,consensus,o
           <div style={{fontSize:11,color:"var(--dim)",marginTop:6}}>⚠️ โอกาส%เป็นค่าสมมติตาม regime · ผลอิง beta ประมาณ — ใช้ชี้ทิศทาง/ขนาดเสี่ยงสัมพัทธ์ ไม่ใช่พยากรณ์ราคา</div>
         </div>
       )}
-      <AllocCard/>
+      <AllocCard consensus={consensus}/>
       {/* Edge — ปิด loop: ระบบนี้แม่นจริงไหม (paper = ชนะ SPX, real = เทรดจริง) */}
       {(()=>{
         const buy10=perf&&perf.horizons&&perf.horizons["10"]&&perf.horizons["10"].BUY;
