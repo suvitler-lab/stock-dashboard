@@ -540,6 +540,8 @@ function CommandCenter({decide,posWatch,perf,tstats,defense,scenario,consensus,o
   const posAlerts=((posWatch&&posWatch.positions)||[]).filter(p=>p.alert);
   // %เปลี่ยนวันนี้ จาก worker (/api/decide) → โชว์คู่กับ P/L ในการ์ด position กันสับสน (วันนี้เขียว แต่ P/L เทียบทุนยังแดงได้)
   const dayChg={}; [...(decide.candidates||[]),...(decide.core||[])].forEach(c=>{ if(c&&c.symbol&&c.changePct!=null) dayChg[String(c.symbol).toUpperCase()]=c.changePct; });
+  // verdict จาก Conflict Resolution → reconcile กับ "น่าซื้อ" (กันบอกซื้อตัวที่ระบบเองค้าน)
+  const resBySym={}; ((consensus&&consensus.items)||[]).forEach(i=>{ if(i&&i.symbol) resBySym[String(i.symbol).toUpperCase()]=i; });
   const earn=[...(decide.candidates||[]),...(decide.core||[])]
     .filter(c=>c.earnings&&c.earnings.daysUntil!=null&&c.earnings.daysUntil>=0&&c.earnings.daysUntil<=7)
     .sort((a,b)=>a.earnings.daysUntil-b.earnings.daysUntil);
@@ -647,10 +649,10 @@ function CommandCenter({decide,posWatch,perf,tstats,defense,scenario,consensus,o
       {showDetail&&(<React.Fragment>
       <div className="cc-actions">
         <div className="cc-box">
-          <div className="cc-box-h" style={{color:"var(--up)"}}>🟢 น่าซื้อ ({buys.length})</div>
+          <div className="cc-box-h" style={{color:"var(--up)"}}>🟢 น่าซื้อ ({buys.length}){(()=>{ const cf=buys.filter(c=>resBySym[String(c.symbol).toUpperCase()]).length; return cf>0?<span className="cc-dim" style={{fontSize:11,fontWeight:400}}> · ✓ ไม่ขัด {buys.length-cf} · ⚠ AI ค้าน {cf}</span>:null; })()}</div>
           {buys.length===0?<div className="cc-empty">ไม่มีสัญญาณซื้อที่ผ่านเกณฑ์</div>:
             buys.map(c=>(<div key={c.symbol} className="cc-item click" onClick={()=>onPick&&onPick(c.symbol)} title="คลิกดูรายละเอียด/เพิ่มแผน">
-              <div className="cc-it-t"><b>{c.symbol}</b> <span className="cc-conv">conv {c.conviction}</span>{c.borderline&&<span className="cc-tag" title={"conviction ใกล้เกณฑ์ (ห่าง "+(c.distToFlip!=null?c.distToFlip:"—")+") — ป้ายพลิกง่าย รอยืนยัน"}>⚖️ ก้ำกึ่ง</span>}{c.sizing&&c.sizing.sizeFactor!=null&&<span className="cc-tag" title="ไม้ถูกลด (correlation/kill-switch/event)">×{c.sizing.sizeFactor}</span>}{c.earnings&&c.earnings.daysUntil!=null&&c.earnings.daysUntil<=7&&<span className="cc-tag">งบ {c.earnings.daysUntil}ว</span>}</div>
+              <div className="cc-it-t"><b>{c.symbol}</b> <span className="cc-conv">conv {c.conviction}</span>{(()=>{ const r=resBySym[String(c.symbol).toUpperCase()]; if(!r)return null; const TONE={success:"#22c55e",info:"#3b82f6",warn:"#f59e0b",danger:"#ef4444"}; const tc=TONE[r.tone]||"#f59e0b"; return <span className="cc-tag" style={{background:tc+"22",color:tc,fontWeight:700}} title="Conflict Resolution ค้านสัญญาณนี้ — คลิกดูในการ์ด Conflict Resolution">⚠ {r.verdict}</span>; })()}{c.borderline&&<span className="cc-tag" title={"conviction ใกล้เกณฑ์ (ห่าง "+(c.distToFlip!=null?c.distToFlip:"—")+") — ป้ายพลิกง่าย รอยืนยัน"}>⚖️ ก้ำกึ่ง</span>}{c.sizing&&c.sizing.sizeFactor!=null&&<span className="cc-tag" title="ไม้ถูกลด (correlation/kill-switch/event)">×{c.sizing.sizeFactor}</span>}{c.earnings&&c.earnings.daysUntil!=null&&c.earnings.daysUntil<=7&&<span className="cc-tag">งบ {c.earnings.daysUntil}ว</span>}</div>
               <div className="cc-sub">{c.sizing&&c.sizing.shares!=null?(f(c.sizing.shares)+" หุ้น · "+c.sizing.pctOfPort+"% พอร์ต"):("$"+f(c.price))}</div>
               {c.fundFlags&&c.fundFlags.length>0&&<div className="cc-sub" style={{color:"#f59e0b"}}>{c.fundFlags.join(" · ")}</div>}
             </div>))}
