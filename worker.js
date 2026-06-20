@@ -1508,6 +1508,7 @@ async function computePerformance(env) {
   const rnd = (x, d = 2) => (x == null || isNaN(x)) ? null : +Number(x).toFixed(d);
   const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
   const stdev = a => { if (a.length < 2) return null; const m = mean(a); return Math.sqrt(a.reduce((s, x) => s + (x - m) * (x - m), 0) / (a.length - 1)); };
+  const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
   // สถิติจากชุด record ที่ filter มาแล้ว
   function stat(set) {
     const n = set.length;
@@ -1522,6 +1523,8 @@ async function computePerformance(env) {
       avgReturn: rnd(mean(rets)),
       avgExcess: rnd(mean(exc)),
       avgExcessNet: rnd(mean(excNet)),
+      medianExcess: rnd(median(exc)),                  // median ทน outlier กว่า mean (โดยเฉพาะ sample เล็ก)
+      medianExcessNet: rnd(median(excNet)),
       infoRatio: sd ? rnd(mean(exc) / sd, 2) : null,   // ส่วนเกินเฉลี่ย / ความผันผวนของส่วนเกิน (risk-adjusted)
     };
   }
@@ -1542,9 +1545,10 @@ async function computePerformance(env) {
     byConviction.mid[h] = stat(recs.filter(r => r.h === h && r.sig === 'BUY' && convTier(r.conviction) === 'mid'));
   });
   const dates = rows.map(r => r.ts_date);
+  const distinctDays = new Set(dates).size;   // วันทำการที่เก็บได้จริง (กัน overlap หลอกว่าข้อมูลเยอะ)
   return {
     ok: true, updated: new Date().toISOString(),
-    dataPoints, snapshots: rows.length, symbols: Object.keys(bySym).length,
+    dataPoints, snapshots: rows.length, symbols: Object.keys(bySym).length, distinctDays,
     dateRange: dates.length ? { from: dates[0], to: dates[dates.length - 1] } : null,
     costPctAssumed: COST,
     horizons, byRegime, byConviction,
@@ -3022,7 +3026,7 @@ export default {
       const f = (x) => x == null ? '—' : (x > 0 ? '+' : '') + Number(x).toFixed(2);
       const col = x => x == null ? '#666' : x > 0 ? '#16a34a' : x < 0 ? '#dc2626' : '#666';
       let body;
-      const dd = (d.ok && d.symbols) ? Math.round(d.snapshots / d.symbols) : 0;   // จำนวนวันทำการที่เก็บได้
+      const dd = d.distinctDays || ((d.ok && d.symbols) ? Math.round(d.snapshots / d.symbols) : 0);   // วันทำการที่เก็บได้จริง
       if (!d.ok) {
         body = `<p>ยังไม่มีข้อมูล: ${d.error || 'unknown'}</p>`;
       } else if (d.snapshots < 4) {
@@ -3039,18 +3043,42 @@ export default {
           const rowsH = ['BUY', 'HOLD', 'SELL'].map(sig => {
             const s = hh[sig] || { n: 0 };
             return `<tr><td><b>${sig}</b></td><td class=num>${s.n}</td>
-              <td class=num>${s.winRate == null ? '—' : s.winRate + '%'}</td>
               <td class=num style="color:${col(s.beatRate == null ? null : s.beatRate - 50)}">${s.beatRate == null ? '—' : s.beatRate + '%'}</td>
-              <td class=num style="color:${col(s.avgReturn)}">${f(s.avgReturn)}%</td>
-              <td class=num style="color:${col(s.avgExcess)}">${f(s.avgExcess)}%</td></tr>`;
+              <td class=num style="color:${col(s.avgExcess)}">${f(s.avgExcess)}%</td>
+              <td class=num style="color:${col(s.medianExcess)}">${f(s.medianExcess)}%</td>
+              <td class=num style="color:${col(s.avgExcessNet)}"><b>${f(s.avgExcessNet)}%</b></td>
+              <td class=num>${s.infoRatio == null ? '—' : s.infoRatio}</td></tr>`;
           }).join('');
-          const warn = early ? `<div class=warn>⚠️ <b>ผลเบื้องต้น (early read)</b> — เก็บแค่ ${dd} วัน = 1 ช่วงเวลา · ดูแค่ว่า "ระบบทำงาน" <b>ยังไม่มีนัยสำคัญทางสถิติ</b> (ต้องสะสมหลายเดือน) อย่าตัดสินใจจากนี้</div>` : '';
-          return `<h2>Horizon ${h} วันทำการ${early ? ' · 🔍 early read' : ''}</h2>${warn}<table><thead><tr><th>สัญญาณ</th><th>n</th><th>หุ้นบวก</th><th>ชนะ SPX</th><th>ผลตอบแทนเฉลี่ย</th><th>ส่วนเกินเหนือตลาด</th></tr></thead><tbody>${rowsH}</tbody></table>`;
+          // BUY−SELL spread (net) = discriminating power (สัญญาณแยกแพ้/ชนะได้ไหม ตัดผลตลาดออก)
+          const buy = hh.BUY || {}, sell = hh.SELL || {};
+          const spread = (buy.avgExcessNet != null && sell.avgExcessNet != null) ? +(buy.avgExcessNet - sell.avgExcessNet).toFixed(2) : null;
+          const spreadHtml = spread != null
+            ? `<div class=note style="background:#f0fdf4;border-color:#bbf7d0">↔️ <b>BUY−SELL spread (net) = ${f(spread)}%</b> · &gt;0 = สัญญาณแยกแพ้/ชนะได้จริง (edge แท้ ตัดผลตลาด) · n: BUY ${buy.n || 0} / SELL ${sell.n || 0}</div>`
+            : `<div class=note>↔️ BUY−SELL spread: รอ SELL signal (ยังไม่มี/น้อย)</div>`;
+          // effective independent periods ≈ distinctDays ÷ horizon (overlap-aware) — ใช้เป็นเกณฑ์นัยสำคัญ ไม่ใช่ n ดิบ
+          const effN = Math.floor(dd / h);
+          const sigStatus = effN < 20
+            ? `<span style="color:#b45309">ยังไม่พอสรุป (ช่วงอิสระ ~${effN} · ต้อง ≥~20 ≈ หลายเดือน)</span>`
+            : `<span style="color:#16a34a">พอประเมินเบื้องต้น (ช่วงอิสระ ~${effN})</span>`;
+          const warn = early ? `<div class=warn>⚠️ <b>ผลเบื้องต้น</b> — เก็บแค่ ${dd} วัน = ช่วงเวลาเดียว · <b>ยังไม่มีนัยสำคัญ</b> อย่าตัดสินใจจากนี้</div>` : '';
+          return `<h2>Horizon ${h} วัน${early ? ' · 🔍 early read' : ''}</h2>${warn}
+            <table><thead><tr><th>สัญญาณ</th><th>n</th><th>ชนะ SPX</th><th>ส่วนเกิน</th><th>median</th><th>Net*</th><th>IR</th></tr></thead><tbody>${rowsH}</tbody></table>
+            ${spreadHtml}<div class=note style="font-size:11.5px">นัยสำคัญ: ${sigStatus}</div>`;
         };
         const blocks = [3, 5, 10, 20].map(h => hzBlock(h, h === 3)).join('');
-        body = `<div class=info>เก็บ snapshot <b>${dd} วันทำการ</b> (${d.snapshots} แถว · ${d.symbols} หุ้น) · ${d.dateRange.from} → ${d.dateRange.to} · จุดวัด ${d.dataPoints}<br>
-          horizon X วัน = เทียบ snapshot ห่างกัน X วัน → ต้องมี snapshot X+1 วัน · นัยสำคัญจริงต้องสะสมหลายเดือน</div>${blocks}
-          <p class=note>💡 <b>ชนะ SPX</b> >50% = signal มี edge เหนือถือดัชนีเฉยๆ · <b>ส่วนเกิน</b> = ผลหลังหักตลาด (ค่าจริงที่สำคัญ) · early read = sample เล็ก ดูเป็นการทดสอบ pipeline ไม่ใช่ผลจริง</p>`;
+        // slice tables — BUY แยกตาม regime / conviction (โชว์ Net · เฉพาะที่มีข้อมูล)
+        const sliceTable = (title, obj, keys, klab) => {
+          const any = keys.some(k => [3, 5, 10, 20].some(h => obj[k] && obj[k][h] && obj[k][h].n > 0));
+          if (!any) return '';
+          const rows = keys.map(k => `<tr><td>${klab(k)}</td>${[3, 5, 10, 20].map(h => { const s = (obj[k] && obj[k][h]) || { n: 0 }; return s.n > 0 ? `<td class=num style="color:${col(s.avgExcessNet)}">${f(s.avgExcessNet)}% <span class=n>(${s.n})</span></td>` : '<td class=num>—</td>'; }).join('')}</tr>`).join('');
+          return `<h2>${title}</h2><table><thead><tr><th></th><th>3ว</th><th>5ว</th><th>10ว</th><th>20ว</th></tr></thead><tbody>${rows}</tbody></table>`;
+        };
+        const regimeBlock = sliceTable('BUY แยกตามภาวะตลาด — ส่วนเกิน Net (edge จริง หรือแค่ long ตอนตลาดขึ้น?)', d.byRegime || {}, ['risk-on', 'neutral', 'risk-off'], k => ({ 'risk-on': '🟢 risk-on', 'neutral': '🟡 neutral', 'risk-off': '🔴 risk-off' }[k] || k));
+        const convBlock = sliceTable('BUY แยกตาม conviction — Net (conviction สูงดีกว่าจริงไหม?)', d.byConviction || {}, ['high', 'mid'], k => k === 'high' ? 'สูง (≥67)' : 'กลาง (<67)');
+        body = `<div class=info>เก็บ <b>${dd} วันทำการ</b> (${d.snapshots} แถว · ${d.symbols} หุ้น) · ${d.dateRange.from} → ${d.dateRange.to}<br>
+          horizon X = เทียบ snapshot ห่าง X วัน · ⚠️ <b>ช่วงเวลาซ้อนทับกัน → n หลอกว่าเยอะ</b> → ดู "ช่วงอิสระ" เป็นเกณฑ์นัยสำคัญ ไม่ใช่ n ดิบ</div>
+          ${blocks}${regimeBlock}${convBlock}
+          <p class=note>💡 <b>Net*</b> (หลังหักต้นทุน ${d.costPctAssumed}%) = ค่าจริงที่สำคัญ ไม่ใช่ gross · <b>median</b> ทน outlier กว่า mean · <b>BUY−SELL spread</b> = edge แท้ (discriminating power) · <b>IR</b> = ส่วนเกิน/ความผันผวน · นัยสำคัญใช้ "ช่วงอิสระ" (overlap-aware) ไม่ใช่ n ดิบ — กัน false positive ตอน sample เล็ก · t-stat/CI + equity curve จะเปิดเมื่อช่วงอิสระ ≥20</p>`;
       }
       const html = `<!DOCTYPE html><html lang=th><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
         <title>วัดผลสัญญาณย้อนหลัง</title><style>
