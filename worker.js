@@ -52,7 +52,7 @@ async function yahooDailyRaw(symbol, range, interval) {
       const ts = r.timestamp || [];
       // เก็บเฉพาะแท่งที่มีราคาปิด (กัน null) — closes (ปิดอย่างเดียว) ไว้คำนวณ indicator
       // ohlc (เปิด/สูง/ต่ำ/ปิด + เวลา) ไว้วาดกราฟแท่งเทียน · field ที่ขาดใช้ราคาปิดแทน
-      const closes = [], ohlc = [], volumes = [];
+      const closes = [], ohlc = [], volumes = [], timestamps = [];
       let hi52 = null, lo52 = null;
       for (let i = 0; i < cArr.length; i++) {
         const c = cArr[i];
@@ -61,6 +61,7 @@ async function yahooDailyRaw(symbol, range, interval) {
         const hi = hArr[i] != null ? hArr[i] : Math.max(o, c);
         const lo = lArr[i] != null ? lArr[i] : Math.min(o, c);
         closes.push(c);
+        timestamps.push(ts[i] != null ? ts[i] : null);   // กรอง sync กับ closes — ไม่งั้น length ไม่ตรง → date-align (beta/corr) fallback เป็น tail-align เพี้ยน
         ohlc.push({ t: ts[i] != null ? ts[i] : null, o, h: hi, l: lo, c });
         volumes.push(vArr[i] != null ? vArr[i] : null);
         if (hi52 == null || hi > hi52) hi52 = hi;
@@ -76,7 +77,7 @@ async function yahooDailyRaw(symbol, range, interval) {
         closes,
         ohlc,
         volumes,
-        timestamps: ts,
+        timestamps,
         week52High: m.fiftyTwoWeekHigh != null ? m.fiftyTwoWeekHigh : hi52,
         week52Low: m.fiftyTwoWeekLow != null ? m.fiftyTwoWeekLow : lo52,
         ok: true, via: 'yahoo',
